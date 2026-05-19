@@ -1,0 +1,26 @@
+# Python / local environments
+__pycache__/
+*.py[cod]
+.venv/
+.venv_train/
+app/.venv_app/
+
+# Local/generated datasets and training outputs
+artifacts/
+data/
+dataset/
+generated_*/
+/models/
+rec_dataset_v0.zip
+font_probe_*.png
+
+# Upstream PaddleOCR checkout and training outputs
+PaddleOCR/
+
+# Local tool state
+.claude/
+.vscode/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
