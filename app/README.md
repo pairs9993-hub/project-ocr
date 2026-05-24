@@ -15,23 +15,26 @@
 
 1. Python 3.10 또는 3.11 (64-bit)을 [python.org](https://www.python.org/downloads/) 에서 설치.
    설치 화면에서 **Add Python to PATH** 체크.
-2. 이 폴더(`app/`) 전체를 회사 PC로 복사.
-3. `run.bat`을 더블클릭. 처음 실행 시 자동으로 `.venv_app` 가상환경을 만들고
+2. Git에서 프로젝트를 clone하거나, 이 폴더(`app/`) 전체를 회사 PC로 복사.
+3. 프로젝트 루트의 `run.bat` 또는 `app/run.bat`을 더블클릭. 처음 실행 시 자동으로 `.venv_app` 가상환경을 만들고
    필요한 패키지를 설치합니다(최초 5~10분 소요, 인터넷 연결 필요).
 4. 설치가 끝나면 브라우저가 자동으로 열리고 앱이 표시됩니다
    (http://localhost:8501).
 
 ## 일반 사용
 
-이후에는 `run.bat`만 더블클릭하면 바로 앱이 뜹니다.
+이후에는 `run.bat`만 더블클릭하면 바로 앱이 뜹니다. 프로젝트 전체 폴더에서
+실행하는 경우 `artifacts/models/real_ui_company_pseudo_rec/` 의 최신 export 모델을
+`app/models/` 기본 파일명으로 자동 동기화한 뒤 실행합니다.
 
 종료: 콘솔 창을 닫거나 `Ctrl+C`.
 
 ## 사용자 정의 모델 (선택)
 
-`app/models/` 폴더에 다음 두 파일이 함께 있으면 **자동으로 사용**됩니다:
+`app/models/` 폴더에 다음 파일이 있으면 **자동으로 사용**됩니다:
 
 - `rec_v0.onnx` — 자체 학습한 PaddleOCR rec 모델 (ONNX)
+- `det_v0.onnx` — 자체 학습한 PaddleOCR det 모델 (ONNX)
 - `ppocr_keys.txt` — 문자 사전
 
 사이드바의 **"자체 학습 모델 사용"** 토글로 켜고 끌 수 있습니다 (기본 ON).
