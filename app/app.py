@@ -89,9 +89,17 @@ st.sidebar.markdown("### 모델 설정")
 
 # Auto-detect bundled custom models
 DEFAULT_MODEL = ROOT / "models" / "rec_v0.onnx"
+DEFAULT_FR_MODEL = ROOT / "models" / "rec_fr_v1.onnx"
 DEFAULT_KEYS = ROOT / "models" / "ppocr_keys.txt"
 DEFAULT_DET = ROOT / "models" / "det_v0.onnx"
-has_bundled = DEFAULT_MODEL.exists() and DEFAULT_KEYS.exists()
+MODEL_PRESETS = {
+    "공용 production recognizer": DEFAULT_MODEL,
+    "프랑스어 recognizer v1": DEFAULT_FR_MODEL,
+}
+available_model_presets = {
+    name: path for name, path in MODEL_PRESETS.items() if path.exists() and DEFAULT_KEYS.exists()
+}
+has_bundled = bool(available_model_presets)
 has_bundled_det = DEFAULT_DET.exists()
 
 if has_bundled:
@@ -100,11 +108,19 @@ if has_bundled:
         value=True,
         help="끄면 RapidOCR 사전학습 rec 모델로 비교 가능합니다.",
     )
+    preset_names = list(available_model_presets)
+    default_preset = "프랑스어 recognizer v1" if "프랑스어 recognizer v1" in available_model_presets else preset_names[0]
+    selected_model_preset = st.sidebar.selectbox(
+        "rec 모델 선택",
+        preset_names,
+        index=preset_names.index(default_preset),
+    )
 else:
     st.sidebar.info(
         "자체 학습 rec ONNX 모델이 `app/models/` 에 없어 RapidOCR 기본 모델을 사용합니다."
     )
     use_custom = False
+    selected_model_preset = ""
 
 if has_bundled_det:
     use_custom_det = st.sidebar.toggle(
@@ -129,7 +145,7 @@ with st.sidebar.expander("고급: 다른 ONNX 경로 지정", expanded=False):
 if custom_model.strip():
     rec_model_path = Path(custom_model).expanduser()
 elif use_custom:
-    rec_model_path = DEFAULT_MODEL
+    rec_model_path = available_model_presets[selected_model_preset]
 else:
     rec_model_path = None
 

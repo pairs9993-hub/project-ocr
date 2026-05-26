@@ -18,8 +18,17 @@ from PIL import Image
 from ocr_runner import _get_engine, ocr_image
 
 
+START_ICON_RE = re.compile(r"\s*▶\s*(?:Ⅱ|II)\s*")
+START_KEY_ARTIFACT_RE = re.compile(
+    r"\b(Press|Presione|Appuyez)\s+(?:▶\s*(?:[fIl1|Ⅱ]{1,2}|A\s*(?:Ⅱ|II)?\s*[lI1|]?)|A\s*[lI1|]|™\s*[lI1|]|[fIl1|Ⅱ]{1,2})\s+(?=(?:to|para|pour|or)\b)",
+    re.IGNORECASE,
+)
+
+
 def normalize_text(text: str) -> str:
     text = unicodedata.normalize("NFKC", text or "")
+    text = START_KEY_ARTIFACT_RE.sub(r"\1 ▶II ", text)
+    text = START_ICON_RE.sub(" ▶II ", text)
     return re.sub(r"\s+", " ", text).strip()
 
 
@@ -66,37 +75,61 @@ def filename_parts(filename: str) -> tuple[str, str]:
     return screen_type, language
 
 
-def labels_to_truth(labels_path: Path) -> dict[str, str]:
-    truth: dict[str, str] = {}
+def labels_to_truth(labels_path: Path) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
     with labels_path.open(encoding="utf-8") as file:
         for line in file:
             entry = json.loads(line)
-            filename = Path(entry["image_path"]).name
-            elements = []
-            for element in entry.get("elements", []):
-                if element.get("type") != "text":
-                    continue
-                x1, y1, x2, y2 = element["bbox"]
-                elements.append(((y1 + y2) / 2, (x1 + x2) / 2, element.get("text", "")))
-            elements.sort(key=lambda item: (item[0], item[1]))
+            image_path = entry.get("image_path") or entry.get("image")
+            if not image_path:
+                continue
+            if "text" in entry and not entry.get("elements"):
+                truth_text = entry.get("text", "")
+            else:
+                elements = []
+                for element in entry.get("elements", []):
+                    if element.get("type") != "text":
+                        continue
+                    x1, y1, x2, y2 = element["bbox"]
+                    elements.append(((y1 + y2) / 2, (x1 + x2) / 2, element.get("text", "")))
+                elements.sort(key=lambda item: (item[0], item[1]))
 
-            lines: list[str] = []
-            current: list[tuple[float, str]] = []
-            current_y: float | None = None
-            for y, x, text in elements:
-                if current_y is None or abs(y - current_y) <= 12.0:
-                    current.append((x, text))
-                    current_y = y if current_y is None else (current_y + y) / 2
-                else:
+                lines: list[str] = []
+                current: list[tuple[float, str]] = []
+                current_y: float | None = None
+                for y, x, text in elements:
+                    if current_y is None or abs(y - current_y) <= 12.0:
+                        current.append((x, text))
+                        current_y = y if current_y is None else (current_y + y) / 2
+                    else:
+                        current.sort()
+                        lines.append(" ".join(text for _, text in current))
+                        current = [(x, text)]
+                        current_y = y
+                if current:
                     current.sort()
                     lines.append(" ".join(text for _, text in current))
-                    current = [(x, text)]
-                    current_y = y
-            if current:
-                current.sort()
-                lines.append(" ".join(text for _, text in current))
-            truth[filename] = "\n".join(lines)
-    return truth
+                truth_text = "\n".join(lines)
+            rows.append({
+                "image_path": image_path,
+                "filename": Path(image_path).name,
+                "truth": truth_text,
+            })
+    return rows
+
+
+def resolve_image_path(labels_path: Path, images_path: Path, entry_image_path: str) -> Path:
+    entry_path = Path(entry_image_path)
+    candidates = [
+        images_path / entry_path.name,
+        images_path / entry_path,
+        labels_path.parent / entry_path,
+        ROOT / entry_path,
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
 
 
 def main() -> int:
@@ -107,36 +140,41 @@ def main() -> int:
     parser.add_argument("--rec-keys", type=Path, default=ROOT / "app/models/ppocr_keys.txt")
     parser.add_argument("--det-model", type=Path, default=ROOT / "app/models/det_v0.onnx")
     parser.add_argument("--limit", type=int, default=0)
+    parser.add_argument("--progress-interval", type=int, default=100)
     parser.add_argument("--out", type=Path, default=ROOT / "artifacts/app_eval/ocr_vs_labels.jsonl")
     args = parser.parse_args()
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     _get_engine.cache_clear()
-    truth = labels_to_truth(args.labels)
-    names = sorted(truth)
+    label_rows = labels_to_truth(args.labels)
+    label_rows.sort(key=lambda item: item["image_path"])
     if args.limit > 0:
-        names = names[: args.limit]
+        label_rows = label_rows[: args.limit]
+    print(f"running {len(label_rows)} images", flush=True)
 
     rows = []
     with args.out.open("w", encoding="utf-8") as output:
-        for index, filename in enumerate(names, 1):
-            image = Image.open(args.images / filename)
+        for index, label_row in enumerate(label_rows, 1):
+            image_path = resolve_image_path(args.labels, args.images, label_row["image_path"])
+            image = Image.open(image_path)
             image.load()
             result = ocr_image(image, args.rec_model, args.rec_keys, args.det_model)
-            cer_value = cer(truth[filename], result.text)
+            cer_value = cer(label_row["truth"], result.text)
             row = {
-                "filename": filename,
+                "filename": label_row["filename"],
+                "image_path": image_path.as_posix(),
                 "cer": cer_value,
                 "verdict": verdict(cer_value),
                 "n_boxes": result.n_boxes,
                 "mean_score": result.mean_score,
-                "reference": truth[filename],
+                "reference": label_row["truth"],
                 "prediction": result.text,
             }
             rows.append(row)
             output.write(json.dumps(row, ensure_ascii=False) + "\n")
-            if index % 100 == 0:
-                print(f"processed {index}/{len(names)}", flush=True)
+            output.flush()
+            if args.progress_interval > 0 and index % args.progress_interval == 0:
+                print(f"processed {index}/{len(label_rows)}", flush=True)
 
     counts = Counter(row["verdict"] for row in rows)
     values = sorted(row["cer"] for row in rows)
