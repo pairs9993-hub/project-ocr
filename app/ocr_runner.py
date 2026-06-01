@@ -160,12 +160,41 @@ _PLACEHOLDER_TIMER_RE = re.compile(r"^[\-\s1ilhmin]+$", re.IGNORECASE)
 _THINQ_BADGE_RE = re.compile(r"^thin[qgd0o]?$", re.IGNORECASE)
 _START_KEY_ICON_RE = re.compile(r"\s*▶\s*(?:Ⅱ|II)\s*")
 _START_KEY_ARTIFACT_RE = re.compile(
-    r"\b(Press|Presione|Appuyez)\s+(?:▶\s*(?:[fIl1|Ⅱ]{1,2}|A\s*(?:Ⅱ|II)?\s*[lI1|]?)|A\s*[lI1|]|™\s*[lI1|]|[fIl1|Ⅱ]{1,2})\s+(?=(?:to|para|pour|or)\b)",
+    r"\b(Press|Presione|Appuyez(?:\s+sur)?)\s+(?:▶\s*(?:[fIl1|Ⅱ]{1,2}|A\s*(?:Ⅱ|II)?\s*[lI1|]?)(?:\s*[lI1|])?|A\s*[lI1|]?|™\s*[lI1|]|[fIl1|Ⅱ]{1,2})\s+(?=(?:to|para|pour|or)\b)",
     re.IGNORECASE,
 )
 _SPANISH_TOMORROW_RE = re.compile(r"\bMA(?:li|l|1i|i)\.?(?=\s|$)", re.IGNORECASE)
 _SPANISH_DELAY_START_RE = re.compile(r"\bEl\s*l?nicio\b|\bEllnicio\b", re.IGNORECASE)
 _PROC_SOAKING_RE = re.compile(r"<PROC_W_S0AKING_PRC", re.IGNORECASE)
+_FRENCH_MISSING_ELISION_L_RE = re.compile(r"^(['’])(?=(?:application|appli|appareil|[ée]quipe|erreur)\b)", re.IGNORECASE)
+_FRENCH_MORE_CYCLES_BROKEN_HEADERS = {
+    "nlieove",
+    "pnsecvles",
+    "plsecyle",
+    "rlsdecye",
+    "plsecyl",
+    "plsecvles",
+    "pnsiecvye",
+    "lsieeve",
+}
+_FRENCH_MORE_CYCLE_LABELS = {
+    "articles pour animaux",
+    "reduire microplastiques",
+    "rincage et essorage",
+    "essorage seulement",
+    "hygiene",
+    "a main/laine",
+    "maillots de bain",
+    "vetements d'enfants",
+    "jeans",
+    "robes",
+    "preservation des couleurs",
+    "taches de sueur",
+    "petite brassee",
+    "grande brassee",
+    "tres grande brassee",
+    "lavage nocturne",
+}
 _EXTRA_RINSE_RE = re.compile(r"^(?:Extra Rinse|Enjuague extra)$", re.IGNORECASE)
 _SCHEDULE_LINE_RE = re.compile(r"\b(?:Iniciar a|Start at)\b", re.IGNORECASE)
 _TIME_1230_RE = re.compile(r"\b1230\s*((?:a|p)\.?\s*m\.?)\b", re.IGNORECASE)
@@ -256,7 +285,7 @@ def _repair_progress_text(text: str) -> str:
         (
             index
             for index, line in enumerate(lines)
-            if line.lower() in {"updating", "actualizar", "restableciendo"}
+            if line.lower() in {"updating", "actualizar", "restableciendo", "mise à niveau"}
         ),
         -1,
     )
@@ -272,6 +301,8 @@ def _repair_progress_text(text: str) -> str:
         return text
 
     status = lines[status_index]
+    if status.lower() == "mise à niveau":
+        return "\n".join(["UP", status, percent])
     if status.lower() in {"updating", "actualizar"}:
         return "\n".join(["UP", status, percent])
     return "\n".join([status, percent])
@@ -285,7 +316,15 @@ def _repair_badge_text(text: str) -> str:
 
 
 def _repair_brand_text(text: str) -> str:
-    return re.sub(r"\bLG\s+Thi(?:n[dgo0]|[o0])\b", "LG ThinQ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bLG\s+Thi(?:n[dgo0]|[o0])\b", "LG ThinQ", text, flags=re.IGNORECASE)
+    return re.sub(r"\bThin[o0]\b", "ThinQ", text, flags=re.IGNORECASE)
+
+
+def _repair_french_update_notice(text: str) -> str:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if len(lines) >= 2 and lines[0].upper() == "UP" and lines[1].lower().startswith("mise à niveau récente"):
+        return "\n".join(lines[1:])
+    return text
 
 
 def _repair_start_key_icons(text: str) -> str:
@@ -302,6 +341,12 @@ def _repair_start_key_icons(text: str) -> str:
 def _repair_known_ui_tokens(text: str) -> str:
     lines = []
     for line in text.splitlines():
+        line = _FRENCH_MISSING_ELISION_L_RE.sub(r"l\1", line)
+        line = re.sub(r"\bbusa\s+ez\b", "buse ez", line, flags=re.IGNORECASE)
+        line = re.sub(r"\bbus[ae]\s+e\.?(?=\s|$)", "buse ez", line, flags=re.IGNORECASE)
+        line = re.sub(r"\b([Dd]istributeur)([12])\b", r"\1 \2", line)
+        line = re.sub(r"\bseu\s+lement\b", "seulement", line, flags=re.IGNORECASE)
+        line = re.sub(r"\bHygiéne\b", "Hygiène", line, flags=re.IGNORECASE)
         line = _SPANISH_TOMORROW_RE.sub("MAÑ.", line)
         line = _SPANISH_DELAY_START_RE.sub("El Inicio", line)
         line = _repair_schedule_line(line)
@@ -310,8 +355,71 @@ def _repair_known_ui_tokens(text: str) -> str:
         if re.fullmatch(r"thin\.", line.strip(), re.IGNORECASE):
             line = "ThinQ AI"
         lines.append(line)
+    lines = _repair_french_more_cycles_lines(lines)
+    lines = _repair_french_placeholder_timer(lines)
     lines = _repair_dry_time_lines(lines)
     return "\n".join(lines)
+
+
+def _normalize_french_cycle_key(text: str) -> str:
+    replacements = str.maketrans(
+        {
+            "à": "a",
+            "â": "a",
+            "ç": "c",
+            "é": "e",
+            "è": "e",
+            "ê": "e",
+            "ë": "e",
+            "î": "i",
+            "ï": "i",
+            "ô": "o",
+            "ù": "u",
+            "û": "u",
+            "ü": "u",
+            "’": "'",
+        }
+    )
+    return re.sub(r"\s+", " ", text.lower().translate(replacements)).strip()
+
+
+def _compact_cycle_header(text: str) -> str:
+    return re.sub(r"[^a-z]", "", _normalize_french_cycle_key(text))
+
+
+def _looks_like_french_cycle_detail(lines: List[str]) -> bool:
+    has_temperature = any(line.startswith("Temp.") for line in lines)
+    has_spin = any(line.startswith("Essorage") for line in lines)
+    has_soil = any(line.startswith("Saleté") for line in lines)
+    return has_temperature and has_spin and has_soil
+
+
+def _repair_french_more_cycles_lines(lines: List[str]) -> List[str]:
+    if not lines or not _looks_like_french_cycle_detail(lines):
+        return lines
+    if _normalize_french_cycle_key(lines[0]) == "plus de cycles":
+        return lines
+    if _compact_cycle_header(lines[0]) in _FRENCH_MORE_CYCLES_BROKEN_HEADERS:
+        repaired = lines.copy()
+        repaired[0] = "Plus de cycles"
+        return repaired
+
+    for label_line_count in (3, 2, 1):
+        if len(lines) < label_line_count:
+            continue
+        label = _normalize_french_cycle_key(" ".join(lines[:label_line_count]))
+        if label in _FRENCH_MORE_CYCLE_LABELS:
+            return ["Plus de cycles", *lines]
+    return lines
+
+
+def _repair_french_placeholder_timer(lines: List[str]) -> List[str]:
+    if len(lines) != 3 or lines[0] != "Normal" or lines[2] != "En pause":
+        return lines
+    middle = lines[1].strip().lower()
+    if "hr" in middle and "min" in middle and re.fullmatch(r"[nil1o0hrm\s-]+", middle):
+        return [lines[0], "-- hr -- min", lines[2]]
+    return lines
 
 
 def _repair_schedule_line(line: str) -> str:
@@ -479,6 +587,7 @@ def _repair_domain_text(text: str) -> str:
     text = _repair_progress_text(text)
     text = _repair_badge_text(text)
     text = _repair_brand_text(text)
+    text = _repair_french_update_notice(text)
     return text
 
 

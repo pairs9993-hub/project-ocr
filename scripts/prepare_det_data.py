@@ -6,9 +6,9 @@ PaddleOCR det reads label lines of the form:
 Image paths in the output are RELATIVE TO THE PROJECT ROOT, so the matching
 PaddleOCR config must set `data_dir: e:/OCR_Project`.
 
-Inputs:
-  train  — dataset/train_manifest.jsonl (998k, image_path already project-root-relative)
-  val    — dataset/test/labels.jsonl     (1500, image_path "images/..." -> prepend "dataset/test/")
+Default inputs:
+    train  — dataset/train_manifest.jsonl (image_path already project-root-relative)
+    val    — dataset/test/labels.jsonl     (image_path "images/..." -> prepend "dataset/test/")
 
 Outputs:
   data/det_dataset_full/det_train.txt
@@ -20,6 +20,20 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+
+
+def resolve_path(root: Path, value: str) -> Path:
+    path = Path(value)
+    if path.is_absolute():
+        return path
+    return root / path
+
+
+def labels_path(root: Path, value: str) -> Path:
+    path = resolve_path(root, value)
+    if path.is_dir():
+        return path / "labels.jsonl"
+    return path
 
 
 def bbox_to_points(bbox, canvas_size=None):
@@ -70,7 +84,7 @@ def convert_entry(entry: dict, image_path_prefix: str = "") -> tuple[str, list] 
     if not polygons:
         return None
     img_path = entry["image_path"]
-    if image_path_prefix:
+    if image_path_prefix and image_path_prefix != ".":
         img_path = f"{image_path_prefix}/{img_path}"
     return img_path, polygons
 
@@ -105,27 +119,35 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--project-root", default=".", help="OCR_Project root")
     p.add_argument("--out-dir", default="data/det_dataset_full")
+    p.add_argument("--train-source", default="dataset/train_manifest.jsonl")
+    p.add_argument("--val-source", default="dataset/test/labels.jsonl")
+    p.add_argument("--train-prefix", default="", help="prefix for image paths in train labels")
+    p.add_argument("--val-prefix", default="dataset/test", help="prefix for image paths in val labels")
+    p.add_argument("--train-output", default="det_train.txt")
+    p.add_argument("--val-output", default="det_val.txt")
     p.add_argument("--train-limit", type=int, default=None, help="cap train rows (None=all)")
     p.add_argument("--val-limit", type=int, default=None, help="cap val rows (None=all)")
     args = p.parse_args()
 
     root = Path(args.project_root).resolve()
-    out_dir = root / args.out_dir
+    out_dir = resolve_path(root, args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    train_source = labels_path(root, args.train_source)
+    val_source = labels_path(root, args.val_source)
 
-    print("converting TRAIN (dataset/train_manifest.jsonl) ...")
+    print(f"converting TRAIN ({train_source}) ...")
     n_train = write_split(
-        in_path=root / "dataset/train_manifest.jsonl",
-        out_path=out_dir / "det_train.txt",
-        image_path_prefix="",  # paths already project-root-relative
+        in_path=train_source,
+        out_path=out_dir / args.train_output,
+        image_path_prefix=args.train_prefix,
         limit=args.train_limit,
     )
 
-    print("converting VAL (dataset/test/labels.jsonl) ...")
+    print(f"converting VAL ({val_source}) ...")
     n_val = write_split(
-        in_path=root / "dataset/test/labels.jsonl",
-        out_path=out_dir / "det_val.txt",
-        image_path_prefix="dataset/test",
+        in_path=val_source,
+        out_path=out_dir / args.val_output,
+        image_path_prefix=args.val_prefix,
         limit=args.val_limit,
     )
 

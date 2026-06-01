@@ -34,6 +34,8 @@
 `app/models/` 폴더에 다음 파일이 있으면 **자동으로 사용**됩니다:
 
 - `rec_v0.onnx` — 자체 학습한 PaddleOCR rec 모델 (ONNX)
+- `rec_fr_v2_hard.onnx` — 프랑스어 hard-case fine-tune rec 모델 (기본 선택)
+- `rec_fr_v1.onnx` — 이전 프랑스어 rec 모델 (비교용 preset)
 - `det_v0.onnx` — 자체 학습한 PaddleOCR det 모델 (ONNX)
 - `ppocr_keys.txt` — 문자 사전
 

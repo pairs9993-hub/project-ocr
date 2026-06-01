@@ -20,7 +20,7 @@ from ocr_runner import _get_engine, ocr_image
 
 START_ICON_RE = re.compile(r"\s*▶\s*(?:Ⅱ|II)\s*")
 START_KEY_ARTIFACT_RE = re.compile(
-    r"\b(Press|Presione|Appuyez)\s+(?:▶\s*(?:[fIl1|Ⅱ]{1,2}|A\s*(?:Ⅱ|II)?\s*[lI1|]?)|A\s*[lI1|]|™\s*[lI1|]|[fIl1|Ⅱ]{1,2})\s+(?=(?:to|para|pour|or)\b)",
+    r"\b(Press|Presione|Appuyez(?:\s+sur)?)\s+(?:▶\s*(?:[fIl1|Ⅱ]{1,2}|A\s*(?:Ⅱ|II)?\s*[lI1|]?)(?:\s*[lI1|])?|A\s*[lI1|]?|™\s*[lI1|]|[fIl1|Ⅱ]{1,2})\s+(?=(?:to|para|pour|or)\b)",
     re.IGNORECASE,
 )
 

@@ -6,7 +6,9 @@
 param(
     [int]$NextSession,
     [Parameter(Mandatory=$true)][string]$NextDeadline,
-    [string]$ProjectRoot = "E:\OCR_Project"
+    [string]$ProjectRoot = "E:\OCR_Project",
+    [string]$Config = "configs/rec/finetune_v0_full.yml",
+    [string]$OutputDir = "output/v0_full"
 )
 
 Set-Location $ProjectRoot
@@ -17,6 +19,8 @@ $startMtime = (Get-Item $safeFile -ErrorAction SilentlyContinue).LastWriteTime
 Write-Host "[chain] watching $safeFile for update..."
 Write-Host "[chain] initial mtime = $startMtime"
 Write-Host "[chain] next session = $NextSession, deadline = $NextDeadline"
+Write-Host "[chain] config = $Config"
+Write-Host "[chain] output_dir = $OutputDir"
 
 while ($true) {
     Start-Sleep -Seconds 60
@@ -31,6 +35,14 @@ while ($true) {
 
 Start-Sleep -Seconds 30   # 체크포인트 flush 여유
 
+$statusFile = Join-Path $ProjectRoot "artifacts/training_full/SESSION_STATUS.txt"
+$statusTail = Get-Content $statusFile -Tail 40 -ErrorAction SilentlyContinue
+if ($statusTail -match "stop_reason\s*:\s*natural_exit") {
+    Write-Host "[chain] previous session exited naturally; not launching another session."
+    return
+}
+
 $trainScript = Join-Path $ProjectRoot "scripts/run_training_session.ps1"
 & powershell.exe -ExecutionPolicy Bypass -NoProfile -File $trainScript `
-    -Session $NextSession -DeadlineTime $NextDeadline
+    -Session $NextSession -DeadlineTime $NextDeadline `
+    -ProjectRoot $ProjectRoot -Config $Config -OutputDir $OutputDir

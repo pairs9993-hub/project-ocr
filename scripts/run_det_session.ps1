@@ -50,9 +50,14 @@ $errFile    = "$logFile.err"
 # ----- resume? -----
 $ckptDir = Join-Path $paddleDir $OutputDir
 $latestPdparams = Join-Path $ckptDir "latest.pdparams"
+$bestPdparams = Join-Path $ckptDir "best_accuracy.pdparams"
 $resumeFlag = @()
 if (Test-Path $latestPdparams) {
     $ckptStem = (Join-Path $ckptDir "latest").Replace("\","/")
+    $resumeFlag = @("-o", "Global.checkpoints=$ckptStem")
+    Write-Host "[det] RESUMING from $ckptStem" -ForegroundColor Cyan
+} elseif (Test-Path $bestPdparams) {
+    $ckptStem = (Join-Path $ckptDir "best_accuracy").Replace("\","/")
     $resumeFlag = @("-o", "Global.checkpoints=$ckptStem")
     Write-Host "[det] RESUMING from $ckptStem" -ForegroundColor Cyan
 } else {

@@ -84,6 +84,23 @@ def crop_text_elements(d: dict, bgr, margin: int):
         yield idx, text, crop
 
 
+def crop_output_dir(crops_dir: Path, stem: str, shard_size: int):
+    if shard_size <= 0:
+        return crops_dir, crops_dir.name
+
+    stem_parts = stem.split("_", 2)
+    shard_name = "shard_misc"
+    if len(stem_parts) >= 2 and stem_parts[1].isdigit():
+        image_index = int(stem_parts[1])
+        shard_start = (image_index // shard_size) * shard_size
+        shard_end = shard_start + shard_size - 1
+        shard_name = f"shard_{shard_start:07d}_{shard_end:07d}"
+
+    shard_dir = crops_dir / shard_name
+    shard_dir.mkdir(parents=True, exist_ok=True)
+    return shard_dir, f"{crops_dir.name}/{shard_name}"
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--train-source", help="dir with labels.jsonl OR a manifest.jsonl path")
@@ -91,6 +108,8 @@ def main():
     p.add_argument("--output-dir", required=True)
     p.add_argument("--char-dict", default="data/dict/ppocr_keys.txt")
     p.add_argument("--margin", type=int, default=4)
+    p.add_argument("--shard-size", type=int, default=0,
+                   help="put crops into image-index shards of this many source images")
     p.add_argument("--train-cap", type=int, default=None,
                    help="cap number of input images for train (debug/prototype)")
     p.add_argument("--val-cap", type=int, default=None)
@@ -129,6 +148,7 @@ def main():
                 if bgr is None:
                     continue
                 stem = img_path.stem
+                crop_dir, rel_dir = crop_output_dir(crops_dir, stem, args.shard_size)
                 produced_any = False
                 for idx, text, crop in crop_text_elements(d, bgr, args.margin):
                     # OOV check
@@ -136,12 +156,12 @@ def main():
                         n_skipped_oov += 1
                         continue
                     crop_name = f"{stem}__{idx:02d}.png"
-                    crop_path = crops_dir / crop_name
+                    crop_path = crop_dir / crop_name
                     ok = cv2.imwrite(str(crop_path), crop)
                     if not ok:
                         n_skipped_size += 1
                         continue
-                    rel = f"{crops_dir.name}/{crop_name}"
+                    rel = f"{rel_dir}/{crop_name}"
                     out_f.write(f"{rel}\t{text}\n")
                     n_crops += 1
                     produced_any = True

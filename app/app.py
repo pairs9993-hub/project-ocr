@@ -89,12 +89,14 @@ st.sidebar.markdown("### 모델 설정")
 
 # Auto-detect bundled custom models
 DEFAULT_MODEL = ROOT / "models" / "rec_v0.onnx"
-DEFAULT_FR_MODEL = ROOT / "models" / "rec_fr_v1.onnx"
+DEFAULT_FR_V1_MODEL = ROOT / "models" / "rec_fr_v1.onnx"
+DEFAULT_FR_V2_HARD_MODEL = ROOT / "models" / "rec_fr_v2_hard.onnx"
 DEFAULT_KEYS = ROOT / "models" / "ppocr_keys.txt"
 DEFAULT_DET = ROOT / "models" / "det_v0.onnx"
 MODEL_PRESETS = {
     "공용 production recognizer": DEFAULT_MODEL,
-    "프랑스어 recognizer v1": DEFAULT_FR_MODEL,
+    "프랑스어 recognizer v2 hard-case": DEFAULT_FR_V2_HARD_MODEL,
+    "프랑스어 recognizer v1": DEFAULT_FR_V1_MODEL,
 }
 available_model_presets = {
     name: path for name, path in MODEL_PRESETS.items() if path.exists() and DEFAULT_KEYS.exists()
@@ -109,7 +111,11 @@ if has_bundled:
         help="끄면 RapidOCR 사전학습 rec 모델로 비교 가능합니다.",
     )
     preset_names = list(available_model_presets)
-    default_preset = "프랑스어 recognizer v1" if "프랑스어 recognizer v1" in available_model_presets else preset_names[0]
+    default_preset = (
+        "프랑스어 recognizer v2 hard-case"
+        if "프랑스어 recognizer v2 hard-case" in available_model_presets
+        else preset_names[0]
+    )
     selected_model_preset = st.sidebar.selectbox(
         "rec 모델 선택",
         preset_names,

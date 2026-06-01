@@ -1,5 +1,4 @@
-"""Scan every label across train manifest + test/demo and emit a PaddleOCR
-character dictionary covering all 22 languages.
+"""Scan labels and emit a PaddleOCR character dictionary.
 
 Output:
   data/dict/ppocr_keys.txt           one char per line (PaddleOCR convention)
@@ -14,20 +13,36 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 
-def iter_label_files(project: Path):
-    yield project / "dataset/train_manifest.jsonl"
-    yield project / "dataset/test/labels.jsonl"
-    yield project / "dataset/demo/labels.jsonl"
+def resolve_path(project: Path, value: str) -> Path:
+    path = Path(value)
+    if path.is_absolute():
+        return path
+    return project / path
+
+
+def iter_label_files(project: Path, extra_label_files: list[str], include_defaults: bool):
+    if include_defaults:
+        yield project / "dataset/train_manifest.jsonl"
+        yield project / "dataset/test/labels.jsonl"
+        yield project / "dataset/demo/labels.jsonl"
+    for value in extra_label_files:
+        yield resolve_path(project, value)
 
 
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--project-root", default=".")
+    p.add_argument("--label-file", action="append", default=[],
+                   help="Additional labels/manifest JSONL file to include")
+    p.add_argument("--no-defaults", action="store_true",
+                   help="Do not include dataset/train_manifest.jsonl, dataset/test, dataset/demo")
+    p.add_argument("--output-dict", default="data/dict/ppocr_keys.txt")
+    p.add_argument("--output-coverage", default="artifacts/charset/coverage.json")
     args = p.parse_args()
 
     project = Path(args.project_root).resolve()
-    out_dict = project / "data/dict/ppocr_keys.txt"
-    out_cov = project / "artifacts/charset/coverage.json"
+    out_dict = resolve_path(project, args.output_dict)
+    out_cov = resolve_path(project, args.output_coverage)
     out_dict.parent.mkdir(parents=True, exist_ok=True)
     out_cov.parent.mkdir(parents=True, exist_ok=True)
 
@@ -37,7 +52,7 @@ def main():
     by_lang: dict = defaultdict(Counter)
     n_lines_per_source: dict = {}
 
-    for lf in iter_label_files(project):
+    for lf in iter_label_files(project, args.label_file, include_defaults=not args.no_defaults):
         if not lf.exists():
             print(f"skip (not found): {lf}", file=sys.stderr)
             continue
@@ -58,6 +73,8 @@ def main():
                         texts.append(t)
                 if not texts and "raw_text" in d:
                     texts = [d["raw_text"]]
+                if not texts and "text" in d:
+                    texts = [d["text"]]
                 for t in texts:
                     t = unicodedata.normalize("NFC", t)
                     for ch in t:
