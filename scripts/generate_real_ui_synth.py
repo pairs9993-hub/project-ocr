@@ -1,8 +1,8 @@
 """Generate washer/dryer UI synthetic screenshots for OCR training.
 
 This generator is intentionally narrower than the root synth_generator.py:
-it targets LG-style washer/dryer screens in English, French, and Spanish and
-emits the same labels.jsonl schema used by the existing det/rec prep scripts.
+it targets LG-style washer/dryer screens across selected UI locales and emits
+the same labels.jsonl schema used by the existing det/rec prep scripts.
 
 Example:
   python scripts/generate_real_ui_synth.py --output-dir artifacts/real_ui_smoke --count 30
@@ -22,6 +22,8 @@ from pathlib import Path
 from typing import Callable
 
 from PIL import Image, ImageDraw, ImageFont
+
+from real_ui_zh_lang import ZH_LANG
 
 
 CANVAS_SMALL = (320, 240)
@@ -45,6 +47,25 @@ FONT_CANDIDATES = {
         "C:/Windows/Fonts/arialbd.ttf",
         "C:/Windows/Fonts/tahomabd.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    ],
+}
+
+CJK_FONT_CANDIDATES = {
+    "regular": [
+        "C:/Windows/Fonts/msjh.ttc",
+        "C:/Windows/Fonts/msyh.ttc",
+        "C:/Windows/Fonts/mingliu.ttc",
+        "C:/Windows/Fonts/simsun.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+    ],
+    "bold": [
+        "C:/Windows/Fonts/msjhbd.ttc",
+        "C:/Windows/Fonts/msyhbd.ttc",
+        "C:/Windows/Fonts/mingliub.ttc",
+        "C:/Windows/Fonts/simhei.ttf",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc",
     ],
 }
 
@@ -511,18 +532,30 @@ LANG = {
     },
 }
 
+LANG.update(ZH_LANG)
 
-def resolve_font_path(kind: str) -> str | None:
-    for candidate in FONT_CANDIDATES[kind]:
+
+def contains_cjk(text: str) -> bool:
+    return any(
+        0x3400 <= ord(ch) <= 0x4DBF
+        or 0x4E00 <= ord(ch) <= 0x9FFF
+        or 0xF900 <= ord(ch) <= 0xFAFF
+        for ch in text
+    )
+
+
+def resolve_font_path(kind: str, cjk: bool = False) -> str | None:
+    candidates = CJK_FONT_CANDIDATES[kind] + FONT_CANDIDATES[kind] if cjk else FONT_CANDIDATES[kind]
+    for candidate in candidates:
         if Path(candidate).exists():
             return candidate
     return None
 
 
-@lru_cache(maxsize=256)
-def get_font(size: int, bold: bool = False) -> ImageFont.ImageFont:
+@lru_cache(maxsize=512)
+def get_font(size: int, bold: bool = False, cjk: bool = False) -> ImageFont.ImageFont:
     kind = "bold" if bold else "regular"
-    path = resolve_font_path(kind)
+    path = resolve_font_path(kind, cjk=cjk)
     if path is None:
         return ImageFont.load_default()
     return ImageFont.truetype(path, size)
@@ -545,12 +578,13 @@ def text_size(draw: ImageDraw.ImageDraw, text: str, fnt: ImageFont.ImageFont) ->
 
 def fit_font(draw: ImageDraw.ImageDraw, text: str, max_width: int, max_size: int,
              min_size: int = 10, bold: bool = False) -> tuple[ImageFont.ImageFont, int]:
+    cjk = contains_cjk(text)
     for size in range(max_size, min_size - 1, -1):
-        fnt = get_font(size, bold=bold)
+        fnt = get_font(size, bold=bold, cjk=cjk)
         width, _ = text_size(draw, text, fnt)
         if width <= max_width:
             return fnt, size
-    return get_font(min_size, bold=bold), min_size
+    return get_font(min_size, bold=bold, cjk=cjk), min_size
 
 
 def has_drawn_symbol(text: str) -> bool:
@@ -593,12 +627,13 @@ def symbol_text_size(draw: ImageDraw.ImageDraw, text: str, fnt: ImageFont.ImageF
 
 def fit_symbol_font(draw: ImageDraw.ImageDraw, text: str, max_width: int, max_size: int,
                     min_size: int = 10, bold: bool = False) -> tuple[ImageFont.ImageFont, int]:
+    cjk = contains_cjk(text)
     for size in range(max_size, min_size - 1, -1):
-        fnt = get_font(size, bold=bold)
+        fnt = get_font(size, bold=bold, cjk=cjk)
         width, _ = symbol_text_size(draw, text, fnt, size)
         if width <= max_width:
             return fnt, size
-    return get_font(min_size, bold=bold), min_size
+    return get_font(min_size, bold=bold, cjk=cjk), min_size
 
 
 def add_symbol_text(draw: ImageDraw.ImageDraw, elements: list[Element], text: str, x: int, y: int,
@@ -876,7 +911,8 @@ def gen_settings_list(canvas_size: tuple[int, int], lang: str, rng: random.Rando
     start = rng.randint(0, len(settings) - 4)
     visible = settings[start:start + 4]
     if rng.random() < 0.35:
-        value = rng.choice(data["on_off"] + data["signal"] + ["English", "Español", "Français", "Connected", "Disconnected"])
+        language_values = data.get("language_menu_values", ["English", "Español", "Français", "Connected", "Disconnected"])
+        value = rng.choice(data["on_off"] + data["signal"] + language_values)
         visible[2] = value
     y = int(height * 0.08)
     raw = []
@@ -925,7 +961,7 @@ def gen_message(canvas_size: tuple[int, int], lang: str, rng: random.Random) -> 
                 "pt": ["Desligue o aparelho", "e chame a assistência."],
                 "no": ["Trekk ut støpselet", "og kontakt service."],
             }
-            lines.extend(service_lines.get(lang, service_lines["en"]))
+            lines.extend(data.get("service_lines", service_lines.get(lang, service_lines["en"])))
     else:
         lines = rng.choice(data["messages"])
     draw_line_stack(draw, elements, lines, canvas_size, int(canvas_size[1] * 0.15), max_size=max(16, canvas_size[1] // 12), first_bold=True, line_gap=8, max_width_ratio=0.95)
@@ -969,7 +1005,7 @@ def gen_hard_schedule(canvas_size: tuple[int, int], lang: str, rng: random.Rando
         "pt": (["Hoje", "Amanhã"], ["AM 12:00", "AM 12:30", "PM 12:00", "PM 12:30"], "Início programado ativo"),
         "no": (["I dag", "I morgen"], ["AM 12:00", "AM 12:30", "PM 12:00", "PM 12:30"], "Utsatt start aktiv"),
     }
-    days, clocks, status = schedule_text.get(lang, schedule_text["en"])
+    days, clocks, status = data.get("schedule_text", schedule_text.get(lang, schedule_text["en"]))
     day = rng.choice(days)
     clock = rng.choice(clocks)
     lines = [cycle, day, clock, status, data["hint_add"]]
@@ -1008,21 +1044,21 @@ def gen_hard_progress_timer(canvas_size: tuple[int, int], lang: str, rng: random
     draw = ImageDraw.Draw(img)
     width, height = canvas_size
     elements: list[Element] = []
-    cycle_pool = {
+    cycle_pool = data.get("progress_cycles", {
         "fr": ["Normal", "Lavage AI", "Jeans", "Robes", "Hygiène", "Literie", "Nettoyage de cuve", "Lavage nocturne"],
         "en": ["Normal", "AI Wash", "Jeans", "Bedding", "Sanitary", "Tub Clean", "Night Wash"],
         "es": ["Normal", "Lavado AI", "Jeans", "Ropa de cama", "Higiénico", "Limpieza de tina"],
-    }.get(lang, ["Normal", data["cycles"][1], rng.choice(data["cycles"])])
-    status_pool = {
+    }.get(lang, ["Normal", data["cycles"][1], rng.choice(data["cycles"])]))
+    status_pool = data.get("progress_status", {
         "fr": ["Lavage en cours", "Rinçage en cours", "Essorage en cours", "Trempage", "Prélavage en cours", "Nettoyage", "En attente d'être terminé"],
         "en": ["Washing", "Rinsing", "Spinning", "Soaking", "Pre-washing", "Cleaning", "Waiting to be completed"],
         "es": ["Lavando", "Enjuagando", "Centrifugando", "Remojo", "Prelavado", "Limpiando", "Esperando finalizar"],
-    }.get(lang, data["status"])
-    hint_pool = {
+    }.get(lang, data["status"]))
+    hint_pool = data.get("progress_hints", {
         "fr": ["Appuyez sur ▶Ⅱ pour ajoute", "Appuyez sur ▶Ⅱ pour ajouter", "Appuyez ▶Ⅱ pour démarrer.", "Appuyez sur ▶Ⅱ pour démarrer"],
         "en": ["Press ▶Ⅱ to add garments", "Press ▶Ⅱ to start the cycle", "Press ▶Ⅱ to resume"],
         "es": ["Presione ▶Ⅱ para agregar", "Presione ▶Ⅱ para iniciar", "Presione ▶Ⅱ para continuar"],
-    }.get(lang, [data["hint_add"], data["hint_start"]])
+    }.get(lang, [data["hint_add"], data["hint_start"]]))
     lines = [rng.choice(cycle_pool), rand_hard_timer(data, rng, english_hr=lang == "fr"), rng.choice(status_pool)]
     if rng.random() < 0.92:
         lines.append(rng.choice(hint_pool))
@@ -1052,7 +1088,7 @@ def gen_hard_numeric_options(canvas_size: tuple[int, int], lang: str, rng: rando
             "en": "Extra Rinse", "fr": "Rinçage extra", "es": "Enjuague extra",
             "de": "Extra Spülen", "nl": "Extra spoelen", "it": "Extra risciacquo",
             "pt": "Enxágue extra", "no": "Ekstra skylling",
-        }.get(lang, "Extra Rinse")
+        }.get(lang, data.get("extra_rinse", "Extra Rinse"))
         values = rng.choice([["+2", "+1", "0"], ["+1", "0"]])
     else:
         title = data["labels"]["dry_time"]
@@ -1072,6 +1108,7 @@ def gen_hard_numeric_options(canvas_size: tuple[int, int], lang: str, rng: rando
 
 
 def gen_hard_dense_description(canvas_size: tuple[int, int], lang: str, rng: random.Random) -> tuple[Image.Image, list[Element], str, str]:
+    data = LANG[lang]
     descriptions = {
         "en": [
             ["Tumble", "Washes clothes with a", "light tapping action to", "untangle them."],
@@ -1117,7 +1154,7 @@ def gen_hard_dense_description(canvas_size: tuple[int, int], lang: str, rng: ran
     img, bg = make_background(canvas_size, rng)
     draw = ImageDraw.Draw(img)
     elements: list[Element] = []
-    lines = rng.choice(descriptions[lang])
+    lines = rng.choice(data.get("dense_descriptions", descriptions.get(lang, descriptions["en"])))
     y = int(canvas_size[1] * 0.08)
     for idx, line in enumerate(lines):
         max_size = max(15, canvas_size[1] // (13 if idx == 0 else 18))
@@ -1127,6 +1164,7 @@ def gen_hard_dense_description(canvas_size: tuple[int, int], lang: str, rng: ran
 
 
 def gen_hard_blue_microtext(canvas_size: tuple[int, int], lang: str, rng: random.Random) -> tuple[Image.Image, list[Element], str, str]:
+    data = LANG[lang]
     blue_lines = {
         "en": [
             ["TurboWash™", "Washes clothes quickly", "while saving energy."],
@@ -1156,7 +1194,7 @@ def gen_hard_blue_microtext(canvas_size: tuple[int, int], lang: str, rng: random
             ["Más ciclos", "Balanceo", "Lava con un", "movimiento suave."],
         ],
     }
-    lines = rng.choice(blue_lines.get(lang, blue_lines["en"]))
+    lines = rng.choice(data.get("blue_microtext", blue_lines.get(lang, blue_lines["en"])))
     width, height = canvas_size
     elements: list[Element] = []
     palette = [(0, 174, 239), (0, 145, 219), (0, 118, 196), (11, 91, 170)]
