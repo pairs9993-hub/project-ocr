@@ -1,0 +1,10 @@
+{
+  "package_name": "example_paddle_shared_det_multirec",
+  "version": "1.0.0",
+  "detector_model_dir": "detector_infer",
+  "dictionary": "dict/ppocr_keys.txt",
+  "recognizer_model_dirs": {
+    "en_es": "recognizers/rec_en_es_infer",
+    "fr": "recognizers/rec_fr_infer"
+  }
+}

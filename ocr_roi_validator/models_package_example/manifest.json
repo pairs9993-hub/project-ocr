@@ -1,0 +1,21 @@
+{
+  "package_name": "example_shared_det_multirec",
+  "version": "1.0.0",
+  "detector_model": "detector/det.onnx",
+  "dictionary": "dict/ppocr_keys.txt",
+  "recognizers": {
+    "en_es": "recognizers/rec_en_es.onnx",
+    "fr": "recognizers/rec_fr.onnx",
+    "zh": "recognizers/rec_zh.onnx"
+  },
+  "preprocess": {
+    "det_limit_type": "min",
+    "det_limit_side_len": 640,
+    "det_mean": [0.485, 0.456, 0.406],
+    "det_std": [0.229, 0.224, 0.225],
+    "det_box_thresh": 0.5,
+    "det_unclip_ratio": 3.5,
+    "det_donot_use_dilation": true,
+    "use_cls": false
+  }
+}

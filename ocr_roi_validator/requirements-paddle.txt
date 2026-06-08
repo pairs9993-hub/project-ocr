@@ -1,0 +1,4 @@
+# Install this in a Python 3.10 environment for best compatibility on Windows CPU
+paddlepaddle==2.6.2
+paddleocr==2.7.3
+numpy<2
