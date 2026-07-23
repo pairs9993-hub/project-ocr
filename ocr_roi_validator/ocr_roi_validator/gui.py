@@ -16,7 +16,7 @@ from PIL import Image, ImageTk
 from .capture import grab_screen_rect, timed_capture
 from .compare import compare_text
 from .ocr_engine import OCREngine
-from .scroll_merge import AdaptiveFrameSampler, ScrollTextAccumulator
+from .scroll_merge import AdaptiveFrameSampler, ScrollTextAccumulator, VerticalListAccumulator
 
 
 Rect = tuple[int, int, int, int]
@@ -151,6 +151,7 @@ class OCRValidatorGUI:
         self.context_detect_var = tk.BooleanVar(value=True)
         self.context_margin_var = tk.StringVar(value="120")
         self.scroll_mode_var = tk.BooleanVar(value=False)
+        self.vertical_list_mode_var = tk.BooleanVar(value=False)
         self.scroll_fps_var = tk.StringVar(value="8")
         self.live_verify_var = tk.BooleanVar(value=True)
         self.live_fps_var = tk.StringVar(value="8")
@@ -165,7 +166,6 @@ class OCRValidatorGUI:
         self.live_log_lines: list[str] = []
         self.max_live_log_lines = 300
 
-        self.expected_var = tk.StringVar(value="")
         self.status_var = tk.StringVar(value="Ready")
 
         self._build_layout()
@@ -247,6 +247,7 @@ class OCRValidatorGUI:
         ttk.Entry(row_b, textvariable=self.context_margin_var, width=4).pack(side=tk.LEFT)
 
         ttk.Checkbutton(row_b, text="Scroll Mode", variable=self.scroll_mode_var).pack(side=tk.LEFT, padx=(10, 4))
+        ttk.Checkbutton(row_b, text="Vertical List", variable=self.vertical_list_mode_var).pack(side=tk.LEFT, padx=(6, 4))
         ttk.Label(row_b, text="Scroll FPS").pack(side=tk.LEFT, padx=(6, 4))
         ttk.Entry(row_b, textvariable=self.scroll_fps_var, width=4).pack(side=tk.LEFT)
 
@@ -274,8 +275,9 @@ class OCRValidatorGUI:
         self.roi_list.pack(fill=tk.X)
         self.roi_list.bind("<<ListboxSelect>>", self._on_select_roi)
 
-        ttk.Label(right, text="Expected Text (selected ROI)").pack(anchor=tk.W, pady=(8, 0))
-        ttk.Entry(right, textvariable=self.expected_var).pack(fill=tk.X)
+        ttk.Label(right, text="Expected Text (one expected row per line)").pack(anchor=tk.W, pady=(8, 0))
+        self.expected_text = tk.Text(right, height=7, wrap=tk.NONE)
+        self.expected_text.pack(fill=tk.X)
         ttk.Button(right, text="Apply Expected", command=self.apply_expected).pack(anchor=tk.E, pady=(4, 8))
 
         ttk.Label(right, text="Results").pack(anchor=tk.W)
@@ -446,20 +448,21 @@ class OCRValidatorGUI:
         idx = sel[0]
         roi_id = sorted(self.rois)[idx]
         self.selected_roi_id = roi_id
-        self.expected_var.set(self.rois[roi_id].expected)
+        self.expected_text.delete("1.0", tk.END)
+        self.expected_text.insert("1.0", self.rois[roi_id].expected)
 
     def apply_expected(self):
         if self.selected_roi_id is None:
             messagebox.showinfo("Info", "Select an ROI first.")
             return
-        self.rois[self.selected_roi_id].expected = self.expected_var.get()
+        self.rois[self.selected_roi_id].expected = self.expected_text.get("1.0", "end-1c")
         self.status_var.set(f"Updated expected text for ROI {self.selected_roi_id}")
 
     def clear_rois(self):
         self.rois.clear()
         self.next_roi_id = 1
         self.selected_roi_id = None
-        self.expected_var.set("")
+        self.expected_text.delete("1.0", tk.END)
         self._sync_roi_list()
         for row in self.result_tree.get_children():
             self.result_tree.delete(row)
@@ -509,7 +512,7 @@ class OCRValidatorGUI:
             self.result_tree.insert(
                 "",
                 tk.END,
-                values=(roi_id, roi.expected, roi.actual.replace("\n", " | "), score, result),
+                values=(roi_id, roi.expected.replace("\n", " | "), roi.actual.replace("\n", " | "), score, result),
             )
 
         self._refresh_canvas()
@@ -619,19 +622,32 @@ class OCRValidatorGUI:
         if log_active:
             self._append_result_summary(text_map)
 
+    def _new_live_accumulator(self, roi: ROIItem):
+        expected_rows = [row for row in roi.expected.splitlines() if row.strip()]
+        if not expected_rows:
+            return ScrollTextAccumulator(min_length=3, min_score=0.25)
+        if len(expected_rows) > 1 or self.vertical_list_mode_var.get():
+            return VerticalListAccumulator(expected_rows)
+        return ScrollTextAccumulator(
+            min_length=3,
+            min_score=0.25,
+            expected_text=roi.expected,
+        )
+
     def start_live_ocr(self):
         self.live_accumulators = {
-            roi_id: ScrollTextAccumulator(
-                min_length=3,
-                min_score=0.25,
-                expected_text=self.rois[roi_id].expected,
-            )
+            roi_id: self._new_live_accumulator(self.rois[roi_id])
             for roi_id in sorted(self.rois)
         }
         self.live_samplers = {roi_id: AdaptiveFrameSampler() for roi_id in sorted(self.rois)}
         self.live_ocr_active.set()
         self.live_verify_var.set(True)
-        self._append_live_log("OCR started by user")
+        modes = {
+            "vertical" if isinstance(accumulator, VerticalListAccumulator) else "horizontal"
+            for roi_id, accumulator in self.live_accumulators.items()
+            if self.rois[roi_id].expected.strip()
+        }
+        self._append_live_log(f"OCR started by user; mode={'+'.join(sorted(modes)) or 'unverified'}")
         self.status_var.set("OCR active")
 
     def stop_live_ocr(self):
@@ -661,11 +677,7 @@ class OCRValidatorGUI:
         self.live_stop_event.clear()
         self.live_monitor_running = True
         self.live_accumulators = {
-            roi_id: ScrollTextAccumulator(
-                min_length=3,
-                min_score=0.25,
-                expected_text=self.rois[roi_id].expected,
-            )
+            roi_id: self._new_live_accumulator(self.rois[roi_id])
             for roi_id in sorted(self.rois)
         }
         self.live_samplers = {roi_id: AdaptiveFrameSampler() for roi_id in sorted(self.rois)}
@@ -687,23 +699,18 @@ class OCRValidatorGUI:
                                 text_map[roi_id] = self.live_accumulators[roi_id].final_text
                                 continue
                             ocr = self._run_roi_ocr(frame, roi.rect)
-                            acc = self.live_accumulators.setdefault(
-                                roi_id,
-                                ScrollTextAccumulator(
-                                    min_length=3,
-                                    min_score=0.25,
-                                    expected_text=roi.expected,
-                                ),
-                            )
-                            observed_at = perf_counter()
-                            acc.add(ocr.text, ocr.mean_score, observed_at=observed_at)
+                            acc = self.live_accumulators[roi_id]
+                            if isinstance(acc, VerticalListAccumulator):
+                                acc.add(ocr.text, ocr.mean_score)
+                            else:
+                                acc.add(ocr.text, ocr.mean_score, observed_at=perf_counter())
                             text_map[roi_id] = acc.final_text
                             sampled_any = True
                         log_active = sampled_any
                         expected_accumulators = [
                             accumulator
                             for accumulator in self.live_accumulators.values()
-                            if accumulator.expected_text
+                            if isinstance(accumulator, ScrollTextAccumulator) and accumulator.expected_text
                         ]
                         if self.auto_stop_var.get() and expected_accumulators and all(
                             accumulator.ready_to_stop(perf_counter())
@@ -819,12 +826,8 @@ class OCRValidatorGUI:
         threading.Thread(target=worker, daemon=True).start()
 
     def _run_scroll_capture(self, duration: float, fps: float, save_dir: Path | None):
-        accumulators: dict[int, ScrollTextAccumulator] = {
-            roi_id: ScrollTextAccumulator(
-                min_length=3,
-                min_score=self._safe_float("0.25", default=0.25, min_value=0.0, max_value=1.0),
-                expected_text=self.rois[roi_id].expected,
-            )
+        accumulators = {
+            roi_id: self._new_live_accumulator(self.rois[roi_id])
             for roi_id in sorted(self.rois)
         }
         samplers = {roi_id: AdaptiveFrameSampler() for roi_id in sorted(self.rois)}
@@ -846,7 +849,11 @@ class OCRValidatorGUI:
                 if not samplers[roi_id].should_sample(roi_image, perf_counter()):
                     continue
                 ocr = self._run_roi_ocr(frame.image, roi.rect)
-                accumulators[roi_id].add(ocr.text, ocr.mean_score, observed_at=perf_counter())
+                accumulator = accumulators[roi_id]
+                if isinstance(accumulator, VerticalListAccumulator):
+                    accumulator.add(ocr.text, ocr.mean_score)
+                else:
+                    accumulator.add(ocr.text, ocr.mean_score, observed_at=perf_counter())
                 ocr_calls += 1
             self.root.after(
                 0,
@@ -856,7 +863,7 @@ class OCRValidatorGUI:
 
         self.root.after(0, self._finalize_scroll_results, accumulators)
 
-    def _finalize_scroll_results(self, accumulators: dict[int, ScrollTextAccumulator]):
+    def _finalize_scroll_results(self, accumulators):
         for row in self.result_tree.get_children():
             self.result_tree.delete(row)
 
@@ -869,10 +876,32 @@ class OCRValidatorGUI:
         for roi_id in sorted(self.rois):
             roi = self.rois[roi_id]
             accumulator = accumulators.get(roi_id)
+            if isinstance(accumulator, VerticalListAccumulator):
+                accumulator.finalize()
             final_text = accumulator.final_text if accumulator is not None else ""
             roi.actual = final_text
 
-            if roi.expected.strip() and accumulator is not None and accumulator.expected_text:
+            if isinstance(accumulator, VerticalListAccumulator):
+                roi.passed = accumulator.passed
+                if accumulator.passed:
+                    result = "PASS"
+                elif accumulator.flat_passed:
+                    result = "FLAT ONLY"
+                else:
+                    result = "FAIL"
+                score = f"{accumulator.coverage:.2f}"
+                self._append_live_log(
+                    f"ROI{roi_id} ROWS={len(accumulator.unique_indices)}/{len(accumulator.expected_rows)} "
+                    f"ORDER={'Y' if accumulator.order_valid else 'N'} "
+                    f"LOOP={'Y' if accumulator.loop_seen else 'N'} "
+                    f"LAYOUT={'PASS' if accumulator.layout_passed else 'FAIL'} "
+                    f"FLAT={'PASS' if accumulator.flat_passed else 'FAIL'} "
+                    f"FLAT_COVERAGE={accumulator.flat_coverage:.0%} {result}"
+                )
+                if accumulator.missing_indices:
+                    missing_rows = ",".join(str(index + 1) for index in accumulator.missing_indices)
+                    self._append_live_log(f"ROI{roi_id} MISSING_ROWS={missing_rows}")
+            elif roi.expected.strip() and accumulator is not None and accumulator.expected_text:
                 roi.passed = accumulator.cycle_complete
                 result = "PASS" if roi.passed else "FAIL"
                 score = f"{accumulator.coverage:.2f}"
@@ -896,7 +925,7 @@ class OCRValidatorGUI:
             self.result_tree.insert(
                 "",
                 tk.END,
-                values=(roi_id, roi.expected, roi.actual.replace("\n", " | "), score, result),
+                values=(roi_id, roi.expected.replace("\n", " | "), roi.actual.replace("\n", " | "), score, result),
             )
 
         self._refresh_canvas()
