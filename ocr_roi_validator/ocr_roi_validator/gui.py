@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import ctypes
+import sys
 import threading
 from time import perf_counter
 from dataclasses import dataclass
@@ -14,10 +16,27 @@ from PIL import Image, ImageTk
 from .capture import grab_screen_rect, timed_capture
 from .compare import compare_text
 from .ocr_engine import OCREngine
-from .scroll_merge import ScrollTextAccumulator
+from .scroll_merge import AdaptiveFrameSampler, ScrollTextAccumulator
 
 
 Rect = tuple[int, int, int, int]
+
+
+def _absolute_selection_rect(
+    monitor: dict,
+    start: tuple[int, int],
+    end: tuple[int, int],
+) -> Rect | None:
+    x1, y1 = min(start[0], end[0]), min(start[1], end[1])
+    x2, y2 = max(start[0], end[0]), max(start[1], end[1])
+    if x2 - x1 < 2 or y2 - y1 < 2:
+        return None
+    return (
+        monitor["left"] + x1,
+        monitor["top"] + y1,
+        monitor["left"] + x2,
+        monitor["top"] + y2,
+    )
 
 
 @dataclass
@@ -32,11 +51,11 @@ class ROIItem:
 class ScreenAreaSelector(tk.Toplevel):
     def __init__(self, parent: tk.Tk):
         super().__init__(parent)
-        self.title("Select Screen Area")
+        self.overrideredirect(True)
         self.attributes("-topmost", True)
 
         with mss.mss() as sct:
-            self.monitor = sct.monitors[1]
+            self.monitor = dict(sct.monitors[0])
             shot = sct.grab(self.monitor)
 
         self.full_image = Image.frombytes("RGB", shot.size, shot.rgb)
@@ -45,6 +64,14 @@ class ScreenAreaSelector(tk.Toplevel):
         self.canvas = tk.Canvas(self, width=self.full_image.width, height=self.full_image.height, cursor="cross")
         self.canvas.pack(fill=tk.BOTH, expand=True)
         self.canvas.create_image(0, 0, anchor=tk.NW, image=self.photo)
+        self.canvas.create_text(
+            18,
+            18,
+            anchor=tk.NW,
+            text="Drag to select capture area   |   Esc to cancel",
+            fill="white",
+            font=("Segoe UI", 14, "bold"),
+        )
 
         self.start_x = 0
         self.start_y = 0
@@ -55,6 +82,21 @@ class ScreenAreaSelector(tk.Toplevel):
         self.canvas.bind("<B1-Motion>", self._on_drag)
         self.canvas.bind("<ButtonRelease-1>", self._on_release)
         self.bind("<Escape>", lambda _e: self.destroy())
+        self._position_over_virtual_desktop()
+        self.focus_force()
+
+    def _position_over_virtual_desktop(self):
+        left = self.monitor["left"]
+        top = self.monitor["top"]
+        width = self.monitor["width"]
+        height = self.monitor["height"]
+        self.geometry(f"{width}x{height}+0+0")
+        self.update_idletasks()
+        if sys.platform == "win32":
+            hwnd = ctypes.windll.user32.GetParent(self.winfo_id()) or self.winfo_id()
+            ctypes.windll.user32.SetWindowPos(hwnd, -1, left, top, width, height, 0x0040)
+        else:
+            self.geometry(f"{width}x{height}{left:+d}{top:+d}")
 
     def _on_press(self, event):
         self.start_x = event.x
@@ -68,18 +110,11 @@ class ScreenAreaSelector(tk.Toplevel):
             self.canvas.coords(self.rect_id, self.start_x, self.start_y, event.x, event.y)
 
     def _on_release(self, event):
-        x1, y1 = min(self.start_x, event.x), min(self.start_y, event.y)
-        x2, y2 = max(self.start_x, event.x), max(self.start_y, event.y)
-        if x2 - x1 < 2 or y2 - y1 < 2:
-            self.result_rect = None
-            self.destroy()
-            return
-
-        abs_left = self.monitor["left"] + x1
-        abs_top = self.monitor["top"] + y1
-        abs_right = self.monitor["left"] + x2
-        abs_bottom = self.monitor["top"] + y2
-        self.result_rect = (abs_left, abs_top, abs_right, abs_bottom)
+        self.result_rect = _absolute_selection_rect(
+            self.monitor,
+            (self.start_x, self.start_y),
+            (event.x, event.y),
+        )
         self.destroy()
 
 
@@ -116,15 +151,17 @@ class OCRValidatorGUI:
         self.context_detect_var = tk.BooleanVar(value=True)
         self.context_margin_var = tk.StringVar(value="120")
         self.scroll_mode_var = tk.BooleanVar(value=False)
-        self.scroll_fps_var = tk.StringVar(value="30")
+        self.scroll_fps_var = tk.StringVar(value="8")
         self.live_verify_var = tk.BooleanVar(value=True)
         self.live_fps_var = tk.StringVar(value="8")
+        self.auto_stop_var = tk.BooleanVar(value=False)
 
         self.live_stop_event = threading.Event()
         self.live_thread: threading.Thread | None = None
         self.live_monitor_running = False
         self.live_ocr_active = threading.Event()
         self.live_accumulators: dict[int, ScrollTextAccumulator] = {}
+        self.live_samplers: dict[int, AdaptiveFrameSampler] = {}
         self.live_log_lines: list[str] = []
         self.max_live_log_lines = 300
 
@@ -216,6 +253,7 @@ class OCRValidatorGUI:
         ttk.Checkbutton(row_b, text="Live Verify", variable=self.live_verify_var).pack(side=tk.LEFT, padx=(10, 4))
         ttk.Label(row_b, text="Live FPS").pack(side=tk.LEFT, padx=(6, 4))
         ttk.Entry(row_b, textvariable=self.live_fps_var, width=4).pack(side=tk.LEFT)
+        ttk.Checkbutton(row_b, text="Auto Stop", variable=self.auto_stop_var).pack(side=tk.LEFT, padx=(10, 4))
 
         body = ttk.Panedwindow(self.root, orient=tk.HORIZONTAL)
         body.pack(fill=tk.BOTH, expand=True)
@@ -583,9 +621,14 @@ class OCRValidatorGUI:
 
     def start_live_ocr(self):
         self.live_accumulators = {
-            roi_id: ScrollTextAccumulator(min_length=3, min_score=0.25)
+            roi_id: ScrollTextAccumulator(
+                min_length=3,
+                min_score=0.25,
+                expected_text=self.rois[roi_id].expected,
+            )
             for roi_id in sorted(self.rois)
         }
+        self.live_samplers = {roi_id: AdaptiveFrameSampler() for roi_id in sorted(self.rois)}
         self.live_ocr_active.set()
         self.live_verify_var.set(True)
         self._append_live_log("OCR started by user")
@@ -617,7 +660,15 @@ class OCRValidatorGUI:
 
         self.live_stop_event.clear()
         self.live_monitor_running = True
-        self.live_accumulators = {roi_id: ScrollTextAccumulator(min_length=3, min_score=0.25) for roi_id in sorted(self.rois)}
+        self.live_accumulators = {
+            roi_id: ScrollTextAccumulator(
+                min_length=3,
+                min_score=0.25,
+                expected_text=self.rois[roi_id].expected,
+            )
+            for roi_id in sorted(self.rois)
+        }
+        self.live_samplers = {roi_id: AdaptiveFrameSampler() for roi_id in sorted(self.rois)}
 
         def worker():
             interval = 1.0 / fps
@@ -628,12 +679,44 @@ class OCRValidatorGUI:
                     text_map: dict[int, str] = {}
                     log_active = self.live_verify_var.get() and self.live_ocr_active.is_set()
                     if log_active:
+                        sampled_any = False
                         for roi_id in sorted(self.rois):
                             roi = self.rois[roi_id]
+                            sampler = self.live_samplers.setdefault(roi_id, AdaptiveFrameSampler())
+                            if not sampler.should_sample(frame.crop(roi.rect), perf_counter()):
+                                text_map[roi_id] = self.live_accumulators[roi_id].final_text
+                                continue
                             ocr = self._run_roi_ocr(frame, roi.rect)
-                            acc = self.live_accumulators.setdefault(roi_id, ScrollTextAccumulator(min_length=3, min_score=0.25))
-                            acc.add(ocr.text, ocr.mean_score)
+                            acc = self.live_accumulators.setdefault(
+                                roi_id,
+                                ScrollTextAccumulator(
+                                    min_length=3,
+                                    min_score=0.25,
+                                    expected_text=roi.expected,
+                                ),
+                            )
+                            observed_at = perf_counter()
+                            acc.add(ocr.text, ocr.mean_score, observed_at=observed_at)
                             text_map[roi_id] = acc.final_text
+                            sampled_any = True
+                        log_active = sampled_any
+                        expected_accumulators = [
+                            accumulator
+                            for accumulator in self.live_accumulators.values()
+                            if accumulator.expected_text
+                        ]
+                        if self.auto_stop_var.get() and expected_accumulators and all(
+                            accumulator.ready_to_stop(perf_counter())
+                            for accumulator in expected_accumulators
+                        ):
+                            self.live_ocr_active.clear()
+                            self.root.after(0, self.live_verify_var.set, False)
+                            self.root.after(
+                                0,
+                                self._append_live_log,
+                                "Marquee verification complete; OCR stopped automatically",
+                            )
+                            self.root.after(0, self._finalize_scroll_results, self.live_accumulators)
                     else:
                         text_map = {roi_id: self.live_accumulators.get(roi_id, ScrollTextAccumulator()).final_text for roi_id in self.rois}
 
@@ -740,9 +823,12 @@ class OCRValidatorGUI:
             roi_id: ScrollTextAccumulator(
                 min_length=3,
                 min_score=self._safe_float("0.25", default=0.25, min_value=0.0, max_value=1.0),
+                expected_text=self.rois[roi_id].expected,
             )
             for roi_id in sorted(self.rois)
         }
+        samplers = {roi_id: AdaptiveFrameSampler() for roi_id in sorted(self.rois)}
+        ocr_calls = 0
 
         total_frames = max(1, int(duration * fps))
 
@@ -756,9 +842,17 @@ class OCRValidatorGUI:
             self.source_image = frame.image
             for roi_id in sorted(self.rois):
                 roi = self.rois[roi_id]
+                roi_image = frame.image.crop(roi.rect)
+                if not samplers[roi_id].should_sample(roi_image, perf_counter()):
+                    continue
                 ocr = self._run_roi_ocr(frame.image, roi.rect)
-                accumulators[roi_id].add(ocr.text, ocr.mean_score)
-            self.root.after(0, self.status_var.set, f"Scroll frame {frame.index + 1}/{total_frames} processed")
+                accumulators[roi_id].add(ocr.text, ocr.mean_score, observed_at=perf_counter())
+                ocr_calls += 1
+            self.root.after(
+                0,
+                self.status_var.set,
+                f"Scroll frame {frame.index + 1}/{total_frames}; OCR calls {ocr_calls}",
+            )
 
         self.root.after(0, self._finalize_scroll_results, accumulators)
 
@@ -774,10 +868,22 @@ class OCRValidatorGUI:
 
         for roi_id in sorted(self.rois):
             roi = self.rois[roi_id]
-            final_text = accumulators.get(roi_id).final_text if roi_id in accumulators else ""
+            accumulator = accumulators.get(roi_id)
+            final_text = accumulator.final_text if accumulator is not None else ""
             roi.actual = final_text
 
-            if roi.expected.strip():
+            if roi.expected.strip() and accumulator is not None and accumulator.expected_text:
+                roi.passed = accumulator.cycle_complete
+                result = "PASS" if roi.passed else "FAIL"
+                score = f"{accumulator.coverage:.2f}"
+                self._append_live_log(
+                    f"ROI{roi_id} START={'Y' if accumulator.start_seen else 'N'} "
+                    f"END={'Y' if accumulator.end_seen else 'N'} "
+                    f"ORDER={'Y' if accumulator.order_valid else 'N'} "
+                    f"COVERAGE={accumulator.coverage:.0%} "
+                    f"LOOPS={accumulator.completed_wraps} {result}"
+                )
+            elif roi.expected.strip():
                 cmp = compare_text(roi.expected, roi.actual, mode=mode, similarity_threshold=threshold)
                 roi.passed = cmp.passed
                 result = "PASS" if cmp.passed else "FAIL"
@@ -798,6 +904,9 @@ class OCRValidatorGUI:
 
 
 def run_gui(engine: OCREngine):
+    if sys.platform == "win32":
+        with mss.mss():
+            pass
     root = tk.Tk()
     gui = OCRValidatorGUI(root, engine)
     root.after(200, gui._refresh_canvas)
