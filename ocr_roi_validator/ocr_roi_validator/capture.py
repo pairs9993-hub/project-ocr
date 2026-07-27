@@ -21,18 +21,22 @@ class CaptureFrame:
 
 
 def grab_screen_rect(rect: Rect) -> Image.Image:
+    with mss.mss() as sct:
+        return grab_screen_rect_with(sct, rect)
+
+
+def grab_screen_rect_with(sct, rect: Rect) -> Image.Image:
     left, top, right, bottom = rect
     width = max(1, right - left)
     height = max(1, bottom - top)
 
-    with mss.mss() as sct:
-        monitor = {
-            "left": left,
-            "top": top,
-            "width": width,
-            "height": height,
-        }
-        shot = sct.grab(monitor)
+    monitor = {
+        "left": left,
+        "top": top,
+        "width": width,
+        "height": height,
+    }
+    shot = sct.grab(monitor)
     return Image.frombytes("RGB", shot.size, shot.rgb)
 
 
@@ -53,19 +57,20 @@ def timed_capture(
     if save_dir is not None:
         save_dir.mkdir(parents=True, exist_ok=True)
 
-    for index in range(total_frames):
-        frame_start = perf_counter()
-        image = grab_screen_rect(rect)
-        now = datetime.now()
+    with mss.mss() as sct:
+        for index in range(total_frames):
+            frame_start = perf_counter()
+            image = grab_screen_rect_with(sct, rect)
+            now = datetime.now()
 
-        if save_dir is not None:
-            image.save(save_dir / f"{save_prefix}_{index:04d}.png")
+            if save_dir is not None:
+                image.save(save_dir / f"{save_prefix}_{index:04d}.png")
 
-        yield CaptureFrame(index=index, timestamp=now, image=image)
+            yield CaptureFrame(index=index, timestamp=now, image=image)
 
-        elapsed = perf_counter() - frame_start
-        remaining = interval - elapsed
-        if remaining > 0:
-            sleep(remaining)
+            elapsed = perf_counter() - frame_start
+            remaining = interval - elapsed
+            if remaining > 0:
+                sleep(remaining)
 
     _ = perf_counter() - start

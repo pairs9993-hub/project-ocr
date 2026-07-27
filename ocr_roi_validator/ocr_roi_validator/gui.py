@@ -13,13 +13,25 @@ import tkinter as tk
 import mss
 from PIL import Image, ImageTk
 
-from .capture import grab_screen_rect, timed_capture
+from .capture import grab_screen_rect_with, timed_capture
 from .compare import compare_text
 from .ocr_engine import OCREngine
 from .scroll_merge import AdaptiveFrameSampler, ScrollTextAccumulator, VerticalListAccumulator
 
 
 Rect = tuple[int, int, int, int]
+
+
+def _pad_long_roi(image: Image.Image) -> Image.Image:
+    width, height = image.size
+    if width > height * 2:
+        padded = Image.new(image.mode, (width, (width + 1) // 2), image.getpixel((0, 0)))
+    elif height > width * 2:
+        padded = Image.new(image.mode, ((height + 1) // 2, height), image.getpixel((0, 0)))
+    else:
+        return image
+    padded.paste(image, (0, 0))
+    return padded
 
 
 def _absolute_selection_rect(
@@ -148,6 +160,7 @@ class OCRValidatorGUI:
         self.roi_margin_var = tk.StringVar(value="8")
         self.min_roi_side_var = tk.StringVar(value="160")
         self.auto_upscale_var = tk.BooleanVar(value=True)
+        self.fast_long_roi_var = tk.BooleanVar(value=True)
         self.context_detect_var = tk.BooleanVar(value=False)
         self.context_margin_var = tk.StringVar(value="120")
         self.scroll_mode_var = tk.BooleanVar(value=False)
@@ -240,6 +253,7 @@ class OCRValidatorGUI:
         ttk.Entry(row_b, textvariable=self.min_roi_side_var, width=4).pack(side=tk.LEFT)
 
         ttk.Checkbutton(row_b, text="Auto Upscale", variable=self.auto_upscale_var).pack(side=tk.LEFT, padx=(6, 4))
+        ttk.Checkbutton(row_b, text="Fast Long ROI", variable=self.fast_long_roi_var).pack(side=tk.LEFT, padx=(6, 4))
 
         ttk.Checkbutton(row_b, text="Context Detect", variable=self.context_detect_var).pack(side=tk.LEFT, padx=(10, 4))
         ttk.Label(row_b, text="Context Margin(px)").pack(side=tk.LEFT, padx=(6, 4))
@@ -583,6 +597,8 @@ class OCRValidatorGUI:
         ey2 = min(img_h, y2 + margin)
 
         crop = image.crop((ex1, ey1, ex2, ey2))
+        if self.fast_long_roi_var.get():
+            crop = _pad_long_roi(crop)
         if not self.auto_upscale_var.get():
             return crop
 
@@ -747,11 +763,12 @@ class OCRValidatorGUI:
 
         def worker():
             interval = 1.0 / fps
+            capture_session = mss.mss()
             while not self.live_stop_event.is_set():
                 start = perf_counter()
                 verification_completed = False
                 try:
-                    frame = grab_screen_rect(self.screen_base_rect)
+                    frame = grab_screen_rect_with(capture_session, self.screen_base_rect)
                     text_map: dict[int, str] = {}
                     log_active = self.live_verify_var.get() and self.live_ocr_active.is_set()
                     if log_active:
@@ -806,6 +823,7 @@ class OCRValidatorGUI:
                 if remaining > 0:
                     self.live_stop_event.wait(remaining)
 
+            capture_session.close()
             self.root.after(0, self._finalize_live_monitor)
 
         self.live_thread = threading.Thread(target=worker, daemon=True)

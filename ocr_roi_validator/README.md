@@ -114,6 +114,7 @@ python main.py --backend paddle --paddle-package artifacts/my_paddle_package
 ## CPU 성능
 
 - Live FPS 기본값은 2입니다. 회사 노트북에서는 1~2 FPS를 권장합니다.
+- `Fast Long ROI`는 기본 ON입니다. 가로 또는 세로로 매우 긴 ROI를 패딩해 detector 입력이 과도하게 커지는 것을 막습니다. 긴 스크롤 영역에서 인식 결과가 달라지는 경우에만 끄세요.
 - `Context Detect`는 기본 OFF입니다. 켜면 ROI보다 큰 영역을 OCR하므로 CPU 사용량이 증가합니다.
 - 커스텀 Rapid 모델은 기본적으로 detector를 한 번만 실행합니다. 검출 누락이 심한 경우에만 `python main.py --backend rapid --model-package artifacts/my_rapid_package --thorough-detection`으로 두 번째 detector pass를 활성화합니다.
 - 빠른 모드에서도 direct ROI 검출이 비면 detector fallback과 넓은 context ROI를 자동으로 한 번씩 시도합니다. 정상 검출 프레임에는 추가 비용이 없습니다.

@@ -158,8 +158,8 @@ class ScrollTextAccumulator:
         best_new_positions = -1
         for start in range(len(cycle)):
             target = doubled[start:start + len(observed)]
-            ratio = SequenceMatcher(None, target.casefold(), observed.casefold()).ratio()
             matcher = SequenceMatcher(None, target.casefold(), observed.casefold())
+            ratio = matcher.ratio()
             new_positions = sum(
                 1
                 for block in matcher.get_matching_blocks()
