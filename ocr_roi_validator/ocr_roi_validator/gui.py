@@ -148,14 +148,13 @@ class OCRValidatorGUI:
         self.roi_margin_var = tk.StringVar(value="8")
         self.min_roi_side_var = tk.StringVar(value="160")
         self.auto_upscale_var = tk.BooleanVar(value=True)
-        self.context_detect_var = tk.BooleanVar(value=True)
+        self.context_detect_var = tk.BooleanVar(value=False)
         self.context_margin_var = tk.StringVar(value="120")
         self.scroll_mode_var = tk.BooleanVar(value=False)
         self.vertical_list_mode_var = tk.BooleanVar(value=False)
         self.scroll_fps_var = tk.StringVar(value="8")
         self.live_verify_var = tk.BooleanVar(value=True)
-        self.live_fps_var = tk.StringVar(value="8")
-        self.auto_stop_var = tk.BooleanVar(value=False)
+        self.live_fps_var = tk.StringVar(value="2")
 
         self.live_stop_event = threading.Event()
         self.live_thread: threading.Thread | None = None
@@ -246,15 +245,24 @@ class OCRValidatorGUI:
         ttk.Label(row_b, text="Context Margin(px)").pack(side=tk.LEFT, padx=(6, 4))
         ttk.Entry(row_b, textvariable=self.context_margin_var, width=4).pack(side=tk.LEFT)
 
-        ttk.Checkbutton(row_b, text="Scroll Mode", variable=self.scroll_mode_var).pack(side=tk.LEFT, padx=(10, 4))
-        ttk.Checkbutton(row_b, text="Vertical List", variable=self.vertical_list_mode_var).pack(side=tk.LEFT, padx=(6, 4))
+        ttk.Checkbutton(
+            row_b,
+            text="Scrolling / Loop",
+            variable=self.scroll_mode_var,
+            command=self._on_scroll_mode_changed,
+        ).pack(side=tk.LEFT, padx=(10, 4))
+        ttk.Checkbutton(
+            row_b,
+            text="Vertical Rows",
+            variable=self.vertical_list_mode_var,
+            command=self._on_vertical_list_mode_changed,
+        ).pack(side=tk.LEFT, padx=(6, 4))
         ttk.Label(row_b, text="Scroll FPS").pack(side=tk.LEFT, padx=(6, 4))
         ttk.Entry(row_b, textvariable=self.scroll_fps_var, width=4).pack(side=tk.LEFT)
 
         ttk.Checkbutton(row_b, text="Live Verify", variable=self.live_verify_var).pack(side=tk.LEFT, padx=(10, 4))
         ttk.Label(row_b, text="Live FPS").pack(side=tk.LEFT, padx=(6, 4))
         ttk.Entry(row_b, textvariable=self.live_fps_var, width=4).pack(side=tk.LEFT)
-        ttk.Checkbutton(row_b, text="Auto Stop", variable=self.auto_stop_var).pack(side=tk.LEFT, padx=(10, 4))
 
         body = ttk.Panedwindow(self.root, orient=tk.HORIZONTAL)
         body.pack(fill=tk.BOTH, expand=True)
@@ -481,7 +489,11 @@ class OCRValidatorGUI:
         self.live_log_text.insert(tk.END, "\n".join(self.live_log_lines) + "\n")
         self.live_log_text.see(tk.END)
 
-    def _build_result_map(self, text_map: dict[int, str]) -> dict[int, tuple[bool, str, str]]:
+    def _build_result_map(
+        self,
+        text_map: dict[int, str],
+        use_accumulator_results: bool = False,
+    ) -> dict[int, tuple[bool, str, str]]:
         mode = self.compare_mode_var.get()
         try:
             threshold = float(self.similarity_threshold_var.get())
@@ -492,6 +504,23 @@ class OCRValidatorGUI:
         for roi_id in sorted(self.rois):
             roi = self.rois[roi_id]
             roi.actual = text_map.get(roi_id, "")
+            live_accumulator = self.live_accumulators.get(roi_id)
+            if use_accumulator_results and isinstance(live_accumulator, VerticalListAccumulator):
+                roi.passed = live_accumulator.passed
+                all_rows_seen = live_accumulator.coverage == 1.0
+                score = live_accumulator.flat_coverage if all_rows_seen else live_accumulator.coverage
+                if roi.passed:
+                    result = "PASS"
+                elif all_rows_seen:
+                    result = f"MISMATCH {live_accumulator.flat_coverage:.1%}"
+                else:
+                    result = "SCANNING"
+                result_map[roi_id] = (
+                    roi.passed,
+                    f"{score:.2f}",
+                    result,
+                )
+                continue
             if roi.expected.strip():
                 cmp = compare_text(roi.expected, roi.actual, mode=mode, similarity_threshold=threshold)
                 roi.passed = cmp.passed
@@ -501,11 +530,11 @@ class OCRValidatorGUI:
                 result_map[roi_id] = (True, "-", "N/A")
         return result_map
 
-    def _render_result_map(self, text_map: dict[int, str]):
+    def _render_result_map(self, text_map: dict[int, str], use_accumulator_results: bool = False):
         for row in self.result_tree.get_children():
             self.result_tree.delete(row)
 
-        result_map = self._build_result_map(text_map)
+        result_map = self._build_result_map(text_map, use_accumulator_results)
         for roi_id in sorted(self.rois):
             roi = self.rois[roi_id]
             _, score, result = result_map[roi_id]
@@ -579,7 +608,14 @@ class OCRValidatorGUI:
     def _run_roi_ocr(self, frame_image: Image.Image, roi_rect: Rect):
         if not self.context_detect_var.get():
             crop = self._crop_roi(frame_image, roi_rect)
-            return self.engine.run(crop, self.language_var.get())
+            direct_ocr = self.engine.run(crop, self.language_var.get())
+            if direct_ocr.boxes:
+                return direct_ocr
+            return self._run_context_roi_ocr(frame_image, roi_rect, fallback_result=direct_ocr)
+
+        return self._run_context_roi_ocr(frame_image, roi_rect)
+
+    def _run_context_roi_ocr(self, frame_image: Image.Image, roi_rect: Rect, fallback_result=None):
 
         x1, y1, x2, y2 = roi_rect
         img_w, img_h = frame_image.size
@@ -594,6 +630,8 @@ class OCRValidatorGUI:
         context_ocr = self.engine.run(context_crop, self.language_var.get())
 
         if not context_ocr.boxes:
+            if fallback_result is not None:
+                return fallback_result
             # Fallback to direct ROI mode when context detect finds nothing.
             direct_crop = self._crop_roi(frame_image, roi_rect)
             return self.engine.run(direct_crop, self.language_var.get())
@@ -606,6 +644,8 @@ class OCRValidatorGUI:
                 filtered.append(box)
 
         if not filtered:
+            if fallback_result is not None:
+                return fallback_result
             direct_crop = self._crop_roi(frame_image, roi_rect)
             return self.engine.run(direct_crop, self.language_var.get())
 
@@ -618,7 +658,7 @@ class OCRValidatorGUI:
 
     def _apply_live_frame(self, frame_image: Image.Image, text_map: dict[int, str], log_active: bool = False):
         self.source_image = frame_image
-        self._render_result_map(text_map)
+        self._render_result_map(text_map, use_accumulator_results=True)
         if log_active:
             self._append_result_summary(text_map)
 
@@ -627,14 +667,31 @@ class OCRValidatorGUI:
         if not expected_rows:
             return ScrollTextAccumulator(min_length=3, min_score=0.25)
         if len(expected_rows) > 1 or self.vertical_list_mode_var.get():
-            return VerticalListAccumulator(expected_rows)
+            return VerticalListAccumulator(
+                expected_rows,
+                require_loop=self._scrolling_enabled(),
+            )
         return ScrollTextAccumulator(
             min_length=3,
             min_score=0.25,
             expected_text=roi.expected,
         )
 
+    def _scrolling_enabled(self) -> bool:
+        return self.scroll_mode_var.get() or self.vertical_list_mode_var.get()
+
+    def _on_scroll_mode_changed(self) -> None:
+        if not self.scroll_mode_var.get():
+            self.vertical_list_mode_var.set(False)
+
+    def _on_vertical_list_mode_changed(self) -> None:
+        if self.vertical_list_mode_var.get():
+            self.scroll_mode_var.set(True)
+
     def start_live_ocr(self):
+        if self.live_ocr_active.is_set():
+            self._append_live_log("OCR is already active; existing progress was kept")
+            return
         self.live_accumulators = {
             roi_id: self._new_live_accumulator(self.rois[roi_id])
             for roi_id in sorted(self.rois)
@@ -643,7 +700,13 @@ class OCRValidatorGUI:
         self.live_ocr_active.set()
         self.live_verify_var.set(True)
         modes = {
-            "vertical" if isinstance(accumulator, VerticalListAccumulator) else "horizontal"
+            (
+                "vertical"
+                if isinstance(accumulator, VerticalListAccumulator) and accumulator.require_loop
+                else "static-multiline"
+                if isinstance(accumulator, VerticalListAccumulator)
+                else "horizontal"
+            )
             for roi_id, accumulator in self.live_accumulators.items()
             if self.rois[roi_id].expected.strip()
         }
@@ -686,6 +749,7 @@ class OCRValidatorGUI:
             interval = 1.0 / fps
             while not self.live_stop_event.is_set():
                 start = perf_counter()
+                verification_completed = False
                 try:
                     frame = grab_screen_rect(self.screen_base_rect)
                     text_map: dict[int, str] = {}
@@ -704,31 +768,35 @@ class OCRValidatorGUI:
                                 acc.add(ocr.text, ocr.mean_score)
                             else:
                                 acc.add(ocr.text, ocr.mean_score, observed_at=perf_counter())
-                            text_map[roi_id] = acc.final_text
+                            if isinstance(acc, ScrollTextAccumulator) and acc.expected_text and acc.coverage == 0:
+                                raw_text = ocr.text.replace("\n", " | ") if ocr.text else "<no text>"
+                                text_map[roi_id] = f"RAW={raw_text} [score={ocr.mean_score:.2f}, boxes={ocr.n_boxes}]"
+                            else:
+                                text_map[roi_id] = acc.final_text
                             sampled_any = True
                         log_active = sampled_any
                         expected_accumulators = [
                             accumulator
-                            for accumulator in self.live_accumulators.values()
-                            if isinstance(accumulator, ScrollTextAccumulator) and accumulator.expected_text
+                            for roi_id, accumulator in self.live_accumulators.items()
+                            if self.rois[roi_id].expected.strip()
                         ]
-                        if self.auto_stop_var.get() and expected_accumulators and all(
-                            accumulator.ready_to_stop(perf_counter())
+                        if expected_accumulators and all(
+                            (
+                                accumulator.passed
+                                if isinstance(accumulator, VerticalListAccumulator)
+                                else accumulator.ready_to_stop(perf_counter())
+                            )
                             for accumulator in expected_accumulators
                         ):
                             self.live_ocr_active.clear()
-                            self.root.after(0, self.live_verify_var.set, False)
-                            self.root.after(
-                                0,
-                                self._append_live_log,
-                                "Marquee verification complete; OCR stopped automatically",
-                            )
-                            self.root.after(0, self._finalize_scroll_results, self.live_accumulators)
+                            verification_completed = True
                     else:
                         text_map = {roi_id: self.live_accumulators.get(roi_id, ScrollTextAccumulator()).final_text for roi_id in self.rois}
 
                     self.root.after(0, self._apply_live_frame, frame, text_map, log_active)
                     self.root.after(0, self.status_var.set, "Live monitoring...")
+                    if verification_completed:
+                        self.root.after(0, self._complete_live_ocr_automatically)
                 except Exception as exc:
                     self.root.after(0, messagebox.showerror, "Live Monitor Error", str(exc))
                     break
@@ -744,6 +812,12 @@ class OCRValidatorGUI:
         self.live_thread.start()
         self.status_var.set("Live monitor started")
         self._append_live_log("Live monitor started")
+
+    def _complete_live_ocr_automatically(self) -> None:
+        self.live_verify_var.set(False)
+        self._append_live_log("Content verification complete; OCR stopped automatically")
+        self._finalize_scroll_results(self.live_accumulators)
+        self.status_var.set("OCR passed and stopped")
 
     def stop_live_monitor(self):
         self.live_stop_event.set()
@@ -893,10 +967,11 @@ class OCRValidatorGUI:
                 self._append_live_log(
                     f"ROI{roi_id} ROWS={len(accumulator.unique_indices)}/{len(accumulator.expected_rows)} "
                     f"ORDER={'Y' if accumulator.order_valid else 'N'} "
-                    f"LOOP={'Y' if accumulator.loop_seen else 'N'} "
+                    f"CONTENT={'PASS' if accumulator.passed else 'FAIL'} "
                     f"LAYOUT={'PASS' if accumulator.layout_passed else 'FAIL'} "
                     f"FLAT={'PASS' if accumulator.flat_passed else 'FAIL'} "
-                    f"FLAT_COVERAGE={accumulator.flat_coverage:.0%} {result}"
+                    f"FLAT_COVERAGE={accumulator.flat_coverage:.0%} "
+                    f"LOOP={accumulator.loop_status} {result}"
                 )
                 if accumulator.missing_indices:
                     missing_rows = ",".join(str(index + 1) for index in accumulator.missing_indices)

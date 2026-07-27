@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 
@@ -12,6 +13,36 @@ class CompareResult:
     mode: str
     expected_processed: str
     actual_processed: str
+
+
+_UI_IMAGE_TOKEN_RE = re.compile(r"\{\s*\d+\s*:\s*(img_[a-z0-9_]+)\s*\}", re.IGNORECASE)
+_UI_IMAGE_SYMBOLS = {
+    "img_start": "▶Ⅱ",
+    "img_check": "✓",
+    "img_checked": "✓",
+    "img_checkmark": "✓",
+}
+
+
+def normalize_ui_text(text: str) -> str:
+    text = unicodedata.normalize("NFC", text or "")
+    text = text.translate(
+        str.maketrans(
+            {
+                "‘": "'",
+                "’": "'",
+                "ʼ": "'",
+                "\u00a0": " ",
+                "\u202f": " ",
+            }
+        )
+    )
+
+    def replace_image_token(match: re.Match[str]) -> str:
+        token = match.group(1).lower()
+        return _UI_IMAGE_SYMBOLS.get(token, match.group(0))
+
+    return _UI_IMAGE_TOKEN_RE.sub(replace_image_token, text)
 
 
 def _normalize_ignore_case(text: str) -> str:
@@ -28,8 +59,8 @@ def compare_text(
     mode: str,
     similarity_threshold: float = 0.9,
 ) -> CompareResult:
-    expected = expected or ""
-    actual = actual or ""
+    expected = normalize_ui_text(expected)
+    actual = normalize_ui_text(actual)
 
     if mode == "exact":
         exp = expected

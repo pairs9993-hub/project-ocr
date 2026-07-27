@@ -34,6 +34,11 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Path to Paddle model package directory (detector/recognizers inference dirs + dict).",
     )
+    parser.add_argument(
+        "--thorough-detection",
+        action="store_true",
+        help="Run a second detector pass for difficult layouts. Slower on CPU.",
+    )
     return parser.parse_args()
 
 
@@ -53,7 +58,11 @@ def _run_rapid(args: argparse.Namespace) -> int:
         run_gui(engine)
         return 0
 
-    engine = OCREngine(package, backend="rapid")
+    engine = OCREngine(
+        package,
+        backend="rapid",
+        use_detection_fallback=args.thorough_detection,
+    )
     run_gui(engine)
     return 0
 

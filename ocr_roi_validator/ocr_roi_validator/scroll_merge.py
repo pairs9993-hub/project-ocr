@@ -6,9 +6,11 @@ import re
 
 from PIL import Image, ImageChops, ImageStat
 
+from .compare import normalize_ui_text
+
 
 def normalize_scroll_text(text: str) -> str:
-    text = text or ""
+    text = normalize_ui_text(text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
@@ -255,6 +257,7 @@ class ScrollTextAccumulator:
 @dataclass
 class VerticalListAccumulator:
     expected_rows: list[str]
+    require_loop: bool = True
     min_score: float = 0.25
     min_match_ratio: float = 0.65
     observed_rows: list[str] = field(default_factory=list)
@@ -455,7 +458,7 @@ class VerticalListAccumulator:
 
     @property
     def layout_passed(self) -> bool:
-        return self.coverage == 1.0 and self.order_valid and self.loop_seen
+        return self.coverage == 1.0 and self.order_valid
 
     @property
     def flat_coverage(self) -> float:
@@ -496,10 +499,16 @@ class VerticalListAccumulator:
         return self.layout_passed and self.flat_passed
 
     @property
+    def loop_status(self) -> str:
+        if not self.require_loop:
+            return "N/A"
+        return "PASS" if self.loop_seen else "PENDING"
+
+    @property
     def final_text(self) -> str:
         if self._best_window_rows:
-            return " | ".join(
+            return "\n".join(
                 self._best_window_rows.get(index, ("…", 0.0))[0]
                 for index in range(len(self.expected_rows))
             )
-        return " | ".join(self.observed_rows)
+        return "\n".join(self.observed_rows)

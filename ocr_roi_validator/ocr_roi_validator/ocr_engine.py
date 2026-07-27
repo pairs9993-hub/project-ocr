@@ -241,6 +241,7 @@ class OCREngine:
         paddle_package: PaddleModelPackage | None = None,
         use_rapid_default: bool = False,
         backend: str = "rapid",
+        use_detection_fallback: bool = False,
     ):
         if backend not in {"rapid", "paddle"}:
             raise ValueError("backend must be 'rapid' or 'paddle'")
@@ -250,6 +251,7 @@ class OCREngine:
         self.paddle_package = paddle_package
         self.use_rapid_default = use_rapid_default
         self.backend = backend
+        self.use_detection_fallback = use_detection_fallback
 
     def _engine_for_language(self, lang: str):
         if self.backend == "paddle":
@@ -302,7 +304,8 @@ class OCREngine:
             result = self._run_paddle(engine, bgr)
         else:
             result, _ = engine(bgr)
-            if self.package is not None and self.package.detector_model:
+            should_retry_detection = self.use_detection_fallback or not result
+            if should_retry_detection and self.package is not None and self.package.detector_model:
                 p = self.package.preprocess
                 fallback_engine = _build_engine(
                     str(self.package.detector_model),

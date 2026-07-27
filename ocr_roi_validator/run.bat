@@ -2,13 +2,17 @@
 setlocal
 cd /d %~dp0
 
-if not exist .venv (
+set INSTALL_DEPS=0
+if not exist .venv\Scripts\python.exe (
   py -3 -m venv .venv
+  set INSTALL_DEPS=1
 )
 
 call .venv\Scripts\activate
-python -m pip install --upgrade pip
-pip install -r requirements.txt
+if "%INSTALL_DEPS%"=="1" (
+  python -m pip install --upgrade pip
+  pip install -r requirements.txt
+)
 
 set RAPID_PACKAGE=artifacts\my_rapid_package
 

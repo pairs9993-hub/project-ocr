@@ -17,6 +17,8 @@
   - Ignore Space
   - Similarity Match
   - Regex Match
+  - Expected 이미지 토큰: `{0:img_start}` → `▶Ⅱ`, `{0:img_check}` → `✓`
+  - 프랑스어/스페인어 악센트 문자는 Unicode NFC로 정규화하되 서로 다른 문자는 구분
 - 반복 캡처 OCR
   - 기본 2 FPS
   - 캡처 지속 시간 지정
@@ -97,6 +99,27 @@ python main.py --backend paddle --paddle-package artifacts/my_paddle_package
 참고:
 - `--paddle-package`를 지정하지 않으면 PaddleOCR 기본 사전학습 모델을 사용합니다.
 - 패키지에 없는 언어 선택 시 해당 언어는 Paddle 기본 모델로 fallback됩니다.
+
+## 실제 제품 화면 비교
+
+- OCR이 띄어쓰기를 불안정하게 인식하면 Compare를 `ignore_space`로 선택합니다. 공백만 무시하며 `é/e`, `ñ/n` 같은 악센트 차이는 그대로 실패 처리합니다.
+- 화면에 고정된 여러 줄 안내문은 Expected Text에 줄바꿈해서 입력하고 `Scrolling / Loop`를 끕니다. 이 경우 `static-multiline`으로 판정하며 반복 루프를 요구하지 않습니다.
+- 가로로 흐르는 문자열은 `Scrolling / Loop`만 켭니다. 여러 프레임을 누적하고 한 바퀴 순환을 검증합니다.
+- 위로 흐르는 행 목록은 `Vertical Rows`를 켭니다. `Scrolling / Loop`가 자동으로 켜지며 각 행의 내용, 순서, 한 바퀴 순환을 함께 검증합니다.
+- Expected의 모든 행과 문자가 일치하면 `CONTENT=PASS`가 즉시 확정되고 OCR 검증이 자동으로 멈춥니다. 별도 Auto Stop 설정은 없습니다. Live 화면 캡처는 유지되므로 새 검증은 `Start OCR`로 다시 시작할 수 있습니다. 스크롤을 켠 경우 한 바퀴 전에는 `LOOP=PENDING`, 순환이 확인되면 `LOOP=PASS`로 별도 표시됩니다.
+- Expected Text에서는 시작키를 `{0:img_start}`, 체크 표시를 `{0:img_check}`로 입력할 수 있습니다. 중괄호 앞의 숫자는 어떤 값이어도 됩니다.
+- 조합형과 분해형 Unicode 악센트는 같은 글자로 처리합니다. 실제로 악센트를 누락하거나 다른 악센트로 읽은 경우는 OCR 오류로 유지됩니다.
+- 작은 문자와 악센트가 잘 안 읽히면 `Auto Upscale`을 켭니다. 주변 문맥까지 detector가 필요할 때만 `Context Detect`를 켭니다.
+
+## CPU 성능
+
+- Live FPS 기본값은 2입니다. 회사 노트북에서는 1~2 FPS를 권장합니다.
+- `Context Detect`는 기본 OFF입니다. 켜면 ROI보다 큰 영역을 OCR하므로 CPU 사용량이 증가합니다.
+- 커스텀 Rapid 모델은 기본적으로 detector를 한 번만 실행합니다. 검출 누락이 심한 경우에만 `python main.py --backend rapid --model-package artifacts/my_rapid_package --thorough-detection`으로 두 번째 detector pass를 활성화합니다.
+- 빠른 모드에서도 direct ROI 검출이 비면 detector fallback과 넓은 context ROI를 자동으로 한 번씩 시도합니다. 정상 검출 프레임에는 추가 비용이 없습니다.
+- `run.bat`은 가상환경을 처음 만들 때만 패키지를 설치합니다. 의존성을 갱신해야 할 때는 직접 `pip install -r requirements.txt`를 실행합니다.
+
+Live 로그가 계속 `…`만 표시되던 경우에는 이제 `RAW=<text> [score=..., boxes=...]`를 출력합니다. `RAW=<no text>`이면 ROI 또는 detector 문제이고, 텍스트가 있지만 coverage가 0%이면 Expected Text, 언어 선택, 또는 OCR 문자 인식 문제입니다.
 
 ## 사용 흐름
 
