@@ -22,6 +22,24 @@ _UI_IMAGE_SYMBOLS = {
     "img_checked": "✓",
     "img_checkmark": "✓",
 }
+_START_KEY_ICON_RE = re.compile(r"\s*[▶▷►]\s*(?:Ⅱ|II)\s*")
+_START_KEY_ARTIFACT_RE = re.compile(
+    r"\b(Press|Presione|Appuy\w*(?:\s+sur)?)\s+"
+    r"(?:[▶▷►]\s*)?(?:[fIl1|Ⅱ]{1,3}|A\s*(?:Ⅱ|II)?\s*[lI1|]?)\s+"
+    r"(?=(?:to|para|pour|or)\b)",
+    re.IGNORECASE,
+)
+_START_KEY_ONLY_ARTIFACT_RE = re.compile(
+    r"^\s*(?:[▶▷►]\s*)?(?:[Il1|Ⅱ]{1,3}|A\s*(?:Ⅱ|II)?\s*[lI1|]?)\s*$",
+    re.IGNORECASE,
+)
+
+
+def has_ui_image_token(text: str, token: str | None = None) -> bool:
+    for match in _UI_IMAGE_TOKEN_RE.finditer(text or ""):
+        if token is None or match.group(1).casefold() == token.casefold():
+            return True
+    return False
 
 
 def normalize_ui_text(text: str) -> str:
@@ -43,6 +61,19 @@ def normalize_ui_text(text: str) -> str:
         return _UI_IMAGE_SYMBOLS.get(token, match.group(0))
 
     return _UI_IMAGE_TOKEN_RE.sub(replace_image_token, text)
+
+
+def normalize_ocr_ui_text(text: str, expected_text: str) -> str:
+    text = normalize_ui_text(text)
+    if not has_ui_image_token(expected_text, "img_start"):
+        return text
+
+    if _START_KEY_ONLY_ARTIFACT_RE.fullmatch(text):
+        return "▶Ⅱ"
+
+    text = _START_KEY_ARTIFACT_RE.sub(r"\1 ▶Ⅱ ", text)
+    text = _START_KEY_ICON_RE.sub(" ▶Ⅱ ", text)
+    return re.sub(r"[ \t]+", " ", text).strip()
 
 
 def _normalize_ignore_case(text: str) -> str:

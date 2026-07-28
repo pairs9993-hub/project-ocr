@@ -207,14 +207,20 @@ class ScrollTextAccumulator:
     def start_seen(self) -> bool:
         if not self.expected_text:
             return False
-        edge_length = max(3, min(10, len(self.expected_text) // 5))
+        edge_length = min(
+            len(self.expected_text),
+            max(3, min(10, len(self.expected_text) // 5)),
+        )
         return all(position in self._covered_positions for position in range(edge_length))
 
     @property
     def end_seen(self) -> bool:
         if not self.expected_text:
             return False
-        edge_length = max(3, min(10, len(self.expected_text) // 5))
+        edge_length = min(
+            len(self.expected_text),
+            max(3, min(10, len(self.expected_text) // 5)),
+        )
         start = len(self.expected_text) - edge_length
         return all(position in self._covered_positions for position in range(start, len(self.expected_text)))
 

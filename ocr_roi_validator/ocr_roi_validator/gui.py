@@ -14,7 +14,12 @@ import mss
 from PIL import Image, ImageTk
 
 from .capture import grab_screen_rect_with, timed_capture
-from .compare import compare_text
+from .compare import (
+    compare_text,
+    has_ui_image_token,
+    normalize_ocr_ui_text,
+    normalize_ui_text,
+)
 from .ocr_engine import OCREngine
 from .scroll_merge import AdaptiveFrameSampler, ScrollTextAccumulator, VerticalListAccumulator
 
@@ -616,22 +621,42 @@ class OCRValidatorGUI:
         text_map: dict[int, str] = {}
         for roi_id in sorted(self.rois):
             roi = self.rois[roi_id]
-            ocr = self._run_roi_ocr(frame_image, roi.rect)
+            ocr = self._run_roi_ocr(frame_image, roi.rect, roi.expected)
             text_map[roi_id] = ocr.text
 
         self._render_result_map(text_map)
 
-    def _run_roi_ocr(self, frame_image: Image.Image, roi_rect: Rect):
+    def _run_engine(self, image: Image.Image, expected_text: str):
+        result = self.engine.run(
+            image,
+            self.language_var.get(),
+            preserve_small_left_noise=has_ui_image_token(expected_text),
+        )
+        result.text = normalize_ocr_ui_text(result.text, expected_text)
+        return result
+
+    def _run_roi_ocr(self, frame_image: Image.Image, roi_rect: Rect, expected_text: str = ""):
         if not self.context_detect_var.get():
             crop = self._crop_roi(frame_image, roi_rect)
-            direct_ocr = self.engine.run(crop, self.language_var.get())
+            direct_ocr = self._run_engine(crop, expected_text)
             if direct_ocr.boxes:
                 return direct_ocr
-            return self._run_context_roi_ocr(frame_image, roi_rect, fallback_result=direct_ocr)
+            return self._run_context_roi_ocr(
+                frame_image,
+                roi_rect,
+                expected_text=expected_text,
+                fallback_result=direct_ocr,
+            )
 
-        return self._run_context_roi_ocr(frame_image, roi_rect)
+        return self._run_context_roi_ocr(frame_image, roi_rect, expected_text=expected_text)
 
-    def _run_context_roi_ocr(self, frame_image: Image.Image, roi_rect: Rect, fallback_result=None):
+    def _run_context_roi_ocr(
+        self,
+        frame_image: Image.Image,
+        roi_rect: Rect,
+        expected_text: str = "",
+        fallback_result=None,
+    ):
 
         x1, y1, x2, y2 = roi_rect
         img_w, img_h = frame_image.size
@@ -643,14 +668,14 @@ class OCRValidatorGUI:
         cy2 = min(img_h, y2 + context_margin)
 
         context_crop = frame_image.crop((cx1, cy1, cx2, cy2))
-        context_ocr = self.engine.run(context_crop, self.language_var.get())
+        context_ocr = self._run_engine(context_crop, expected_text)
 
         if not context_ocr.boxes:
             if fallback_result is not None:
                 return fallback_result
             # Fallback to direct ROI mode when context detect finds nothing.
             direct_crop = self._crop_roi(frame_image, roi_rect)
-            return self.engine.run(direct_crop, self.language_var.get())
+            return self._run_engine(direct_crop, expected_text)
 
         filtered = []
         for box in context_ocr.boxes:
@@ -663,10 +688,10 @@ class OCRValidatorGUI:
             if fallback_result is not None:
                 return fallback_result
             direct_crop = self._crop_roi(frame_image, roi_rect)
-            return self.engine.run(direct_crop, self.language_var.get())
+            return self._run_engine(direct_crop, expected_text)
 
         text, mean_score = self.engine.text_from_boxes(filtered)
-        context_ocr.text = text
+        context_ocr.text = normalize_ocr_ui_text(text, expected_text)
         context_ocr.mean_score = mean_score
         context_ocr.n_boxes = len(filtered)
         context_ocr.boxes = filtered
@@ -688,7 +713,7 @@ class OCRValidatorGUI:
                 require_loop=self._scrolling_enabled(),
             )
         return ScrollTextAccumulator(
-            min_length=3,
+            min_length=max(1, min(3, len(normalize_ui_text(roi.expected)))),
             min_score=0.25,
             expected_text=roi.expected,
         )
@@ -779,7 +804,7 @@ class OCRValidatorGUI:
                             if not sampler.should_sample(frame.crop(roi.rect), perf_counter()):
                                 text_map[roi_id] = self.live_accumulators[roi_id].final_text
                                 continue
-                            ocr = self._run_roi_ocr(frame, roi.rect)
+                            ocr = self._run_roi_ocr(frame, roi.rect, roi.expected)
                             acc = self.live_accumulators[roi_id]
                             if isinstance(acc, VerticalListAccumulator):
                                 acc.add(ocr.text, ocr.mean_score)
@@ -940,7 +965,7 @@ class OCRValidatorGUI:
                 roi_image = frame.image.crop(roi.rect)
                 if not samplers[roi_id].should_sample(roi_image, perf_counter()):
                     continue
-                ocr = self._run_roi_ocr(frame.image, roi.rect)
+                ocr = self._run_roi_ocr(frame.image, roi.rect, roi.expected)
                 accumulator = accumulators[roi_id]
                 if isinstance(accumulator, VerticalListAccumulator):
                     accumulator.add(ocr.text, ocr.mean_score)

@@ -65,7 +65,7 @@ def _has_word_text(text: str) -> bool:
     return sum(1 for char in text if char.isalpha()) >= 3
 
 
-def _drop_left_gutter_icons(items):
+def _drop_left_gutter_icons(items, preserve_small_left_noise: bool = False):
     filtered = []
     for item in items:
         y, _x, min_x, min_y, max_x, max_y, text, _score = item
@@ -94,7 +94,7 @@ def _drop_left_gutter_icons(items):
             and _has_word_text(other[6])
             for other in items
         )
-        if (is_small_left_noise and has_text_neighbor) or is_top_status_icon:
+        if (is_small_left_noise and has_text_neighbor and not preserve_small_left_noise) or is_top_status_icon:
             continue
         filtered.append(item)
     return filtered
@@ -288,7 +288,12 @@ class OCREngine:
             tuple(p["det_std"]),
         )
 
-    def run(self, image: Image.Image, language: str) -> OCRRunResult:
+    def run(
+        self,
+        image: Image.Image,
+        language: str,
+        preserve_small_left_noise: bool = False,
+    ) -> OCRRunResult:
         if self.backend == "rapid" and not self.use_rapid_default:
             if self.package is None:
                 raise ValueError("Model package is not configured")
@@ -331,7 +336,7 @@ class OCREngine:
             min_x, min_y, max_x, max_y = _box_bounds(box)
             items.append(((min_y + max_y) / 2.0, (min_x + max_x) / 2.0, min_x, min_y, max_x, max_y, str(text), float(score)))
 
-        items = _drop_left_gutter_icons(items)
+        items = _drop_left_gutter_icons(items, preserve_small_left_noise=preserve_small_left_noise)
 
         boxes: List[OCRBox] = []
         merge_items: List[Tuple[float, float, str, float]] = []
