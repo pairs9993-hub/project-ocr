@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import json
 import sys
 import threading
 from time import perf_counter
@@ -63,6 +64,31 @@ class ROIItem:
     expected: str = ""
     actual: str = ""
     passed: bool = False
+
+
+def _save_failed_roi_diagnostic(
+    source_image: Image.Image,
+    roi: ROIItem,
+    output_root: Path = Path("captures") / "failures",
+) -> Path:
+    run_dir = output_root / f"failure_{datetime.now():%Y%m%d_%H%M%S_%f}_roi{roi.roi_id}"
+    run_dir.mkdir(parents=True, exist_ok=False)
+    source_image.crop(roi.rect).save(run_dir / "roi.png")
+    (run_dir / "metadata.json").write_text(
+        json.dumps(
+            {
+                "roi_id": roi.roi_id,
+                "rect": list(roi.rect),
+                "expected": roi.expected,
+                "actual": roi.actual,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return run_dir
 
 
 class ScreenAreaSelector(tk.Toplevel):
@@ -1039,6 +1065,13 @@ class OCRValidatorGUI:
                 roi.passed = True
                 result = "N/A"
                 score = "-"
+
+            if not roi.passed and roi.expected.strip() and self.source_image is not None:
+                try:
+                    diagnostic_dir = _save_failed_roi_diagnostic(self.source_image, roi)
+                    self._append_live_log(f"ROI{roi_id} FAILURE_SAVED={diagnostic_dir}")
+                except OSError as exc:
+                    self._append_live_log(f"ROI{roi_id} FAILURE_SAVE_ERROR={exc}")
 
             self.result_tree.insert(
                 "",

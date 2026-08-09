@@ -6,7 +6,7 @@ import random
 from dataclasses import dataclass
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -65,6 +65,19 @@ TRAINING_PAIRS = (
     TextPair("fr", "i_l_confusion", "Option disponible", "Option disponlble"),
 )
 
+VEUILLEZ_RECOVERY_PAIRS = (
+    TextPair("fr", "over_accent", "Veuillez allumer l'appareil.", "Véuillez allumer l'appareil."),
+    TextPair("fr", "over_accent", "Veuillez fermer la porte.", "Véuillez fermer la porte."),
+    TextPair("fr", "over_accent", "Veuillez patienter.", "Véuillez patienter."),
+    TextPair("fr", "over_accent", "Veuillez sélectionner un cycle.", "Véuillez sélectionner un cycle."),
+    TextPair("fr", "over_accent", "Veuillez vérifier la pression.", "Véuillez vérifier la pression."),
+    TextPair("fr", "over_accent", "Veuillez ouvrir le robinet.", "Véuillez ouvrir le robinet."),
+    TextPair("fr", "over_accent", "Veuillez ajouter le détergent.", "Véuillez ajouter le détergent."),
+    TextPair("fr", "over_accent", "Veuillez nettoyer le filtre.", "Véuillez nettoyer le filtre."),
+    TextPair("fr", "over_accent", "Veuillez reprendre le cycle.", "Véuillez reprendre le cycle."),
+    TextPair("fr", "over_accent", "Veuillez contacter le service.", "Véuillez contacter le service."),
+)
+
 
 def available_fonts() -> list[Path]:
     fonts = [path for path in DEFAULT_FONTS if path.exists()]
@@ -81,6 +94,7 @@ def render_text(
     background: tuple[int, int, int],
     blur_radius: float,
     vertical_offset: int,
+    tight_crop: bool = False,
 ) -> Image.Image:
     scale = 3
     width = 640
@@ -97,6 +111,19 @@ def render_text(
     image = image.resize((width, height), Image.Resampling.LANCZOS)
     if blur_radius:
         image = image.filter(ImageFilter.GaussianBlur(blur_radius))
+    if tight_crop:
+        bbox = ImageChops.difference(image, Image.new("RGB", image.size, background)).getbbox()
+        if bbox:
+            padding = 4
+            left, top, right, bottom = bbox
+            image = image.crop(
+                (
+                    max(0, left - padding),
+                    max(0, top - padding),
+                    min(image.width, right + padding),
+                    min(image.height, bottom + padding),
+                )
+            )
     return image
 
 
@@ -109,12 +136,22 @@ def main() -> int:
     )
     parser.add_argument("--variants", type=int, default=12)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--profile", choices=("evaluation", "training"), default="evaluation")
+    parser.add_argument(
+        "--profile",
+        choices=("evaluation", "training", "veuillez_recovery"),
+        default="evaluation",
+    )
     args = parser.parse_args()
 
     rng = random.Random(args.seed)
     fonts = available_fonts()
-    pairs = PAIRS if args.profile == "evaluation" else TRAINING_PAIRS
+    profiles = {
+        "evaluation": PAIRS,
+        "training": TRAINING_PAIRS,
+        "veuillez_recovery": VEUILLEZ_RECOVERY_PAIRS,
+    }
+    pairs = profiles[args.profile]
+    font_sizes = (18, 20, 22, 24) if args.profile == "veuillez_recovery" else (13, 14, 15, 16)
     image_dir = args.output_dir / "images"
     image_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = args.output_dir / "manifest.jsonl"
@@ -129,7 +166,7 @@ def main() -> int:
     for pair_index, pair in enumerate(pairs):
         for variant in range(args.variants):
             font_path = rng.choice(fonts)
-            font_size = rng.choice((13, 14, 15, 16))
+            font_size = rng.choice(font_sizes)
             foreground, background = rng.choice(palettes)
             blur_radius = rng.choice((0.0, 0.0, 0.2, 0.35))
             vertical_offset = rng.choice((-1, 0, 0, 1))
@@ -143,6 +180,7 @@ def main() -> int:
                     background,
                     blur_radius,
                     vertical_offset,
+                    tight_crop=args.profile == "veuillez_recovery",
                 )
                 image.save(image_dir / filename)
                 rows.append(

@@ -55,20 +55,24 @@ def main() -> int:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--language", choices=("fr", "es"))
     parser.add_argument("--preprocess", choices=PREPROCESS_MODES, default="raw")
+    parser.add_argument("--start-index", type=int, default=0)
     parser.add_argument("--limit", type=int, default=0)
+    parser.add_argument("--append", action="store_true")
     parser.add_argument("--progress-interval", type=int, default=50)
     args = parser.parse_args()
 
     rows = [json.loads(line) for line in args.manifest.read_text(encoding="utf-8").splitlines() if line]
     if args.language:
         rows = [row for row in rows if row.get("language") == args.language]
+    if args.start_index:
+        rows = rows[args.start_index :]
     if args.limit:
         rows = rows[: args.limit]
     _get_engine.cache_clear()
     args.out.parent.mkdir(parents=True, exist_ok=True)
 
     evaluated = []
-    with args.out.open("w", encoding="utf-8") as output:
+    with args.out.open("a" if args.append else "w", encoding="utf-8") as output:
         for index, row in enumerate(rows, 1):
             image_path = args.manifest.parent / row["image_path"]
             with Image.open(image_path) as image:
