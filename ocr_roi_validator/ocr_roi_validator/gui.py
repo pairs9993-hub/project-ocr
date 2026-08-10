@@ -60,20 +60,46 @@ class ROIItem:
     passed: bool = False
 
 
+# Fidelity of the image stored as roi_ocr_input.png.
+FIDELITY_EXACT = "exact_recorded_ocr_input"
+FIDELITY_RECONSTRUCTED = "representative_or_reconstructed_not_exact"
+
+
+@dataclass
+class OCRInputRecord:
+    """The pixels actually handed to ``OCREngine.run()``, captured at call time.
+
+    Recomputing the crop after the fact can diverge from what the recognizer
+    saw -- a control may have changed, or the result may have come from a
+    context crop or several accumulated frames. Recording the image at the call
+    site is the only way to guarantee the saved PNG is the real input.
+    """
+
+    image: Image.Image
+    path_kind: str          # "direct" | "context" | "context_fallback"
+    language: str
+    exact: bool
+    raw_ocr_text: str = ""
+
+
 def _save_failed_roi_diagnostic(
     source_image: Image.Image,
     roi: ROIItem,
     output_root: Path = Path("captures") / "failures",
     preprocess: RoiPreprocessConfig | None = None,
     model_info: dict | None = None,
+    ocr_input: OCRInputRecord | None = None,
 ) -> Path:
     """Save a failed ROI for later analysis.
 
-    ``roi.png`` is the ROI rect alone, as it has always been. When
-    ``preprocess`` is supplied the exact image handed to the recognizer is also
-    saved as ``roi_ocr_input.png``; that crop includes the margin pixels around
-    the rect, which ``roi.png`` does not contain and which cannot be
-    reconstructed from it afterwards.
+    ``roi.png`` is the ROI rect alone, as it has always been.
+
+    ``roi_ocr_input.png`` is written when the recognizer input is available.
+    When ``ocr_input`` carries an image recorded at the OCR call site it is
+    saved verbatim and marked ``exact_recorded_ocr_input``. Otherwise, if
+    ``preprocess`` is given, the crop is recomputed from ``source_image`` and
+    marked ``representative_or_reconstructed_not_exact`` -- a reconstruction is
+    never presented as the real input.
     """
     run_dir = output_root / f"failure_{datetime.now():%Y%m%d_%H%M%S_%f}_roi{roi.roi_id}"
     run_dir.mkdir(parents=True, exist_ok=False)
@@ -85,17 +111,28 @@ def _save_failed_roi_diagnostic(
         "rect": list(roi.rect),
         "expected": roi.expected,
         "actual": roi.actual,
+        "roi_raw_size": list(raw_crop.size),
     }
 
+    saved_input = None
+    if ocr_input is not None:
+        saved_input = ocr_input.image
+        metadata["ocr_input_fidelity"] = (
+            FIDELITY_EXACT if ocr_input.exact else FIDELITY_RECONSTRUCTED
+        )
+        metadata["language"] = ocr_input.language
+        metadata["ocr_path"] = ocr_input.path_kind
+        metadata["ocr_raw_output"] = ocr_input.raw_ocr_text
+    elif preprocess is not None:
+        saved_input = crop_roi(source_image, roi.rect, preprocess)
+        metadata["ocr_input_fidelity"] = FIDELITY_RECONSTRUCTED
+
+    if saved_input is not None:
+        saved_input.save(run_dir / "roi_ocr_input.png")
+        metadata["roi_ocr_input_size"] = list(saved_input.size)
+
     if preprocess is not None:
-        ocr_input = crop_roi(source_image, roi.rect, preprocess)
-        ocr_input.save(run_dir / "roi_ocr_input.png")
         metadata["preprocess"] = preprocess.as_dict()
-        metadata["roi_raw_size"] = list(raw_crop.size)
-        metadata["roi_ocr_input_size"] = list(ocr_input.size)
-        metadata["roi_ocr_input_is_exact"] = True
-    else:
-        metadata["roi_ocr_input_is_exact"] = False
 
     if model_info:
         metadata["models"] = model_info
@@ -193,6 +230,11 @@ class OCRValidatorGUI:
         self.rois: dict[int, ROIItem] = {}
         self.next_roi_id = 1
         self.selected_roi_id: int | None = None
+
+        # Pixels handed to OCREngine.run(), captured at the call site so a
+        # failure diagnostic never has to reconstruct them afterwards.
+        self._last_ocr_input: OCRInputRecord | None = None
+        self._ocr_inputs: dict[int, OCRInputRecord] = {}
 
         self.drawing = False
         self.drag_start = (0, 0)
@@ -599,6 +641,7 @@ class OCRValidatorGUI:
         for roi_id in sorted(self.rois):
             roi = self.rois[roi_id]
             _, score, result = result_map[roi_id]
+            self._maybe_save_failure(roi_id, roi, use_accumulator_results)
             self.result_tree.insert(
                 "",
                 tk.END,
@@ -606,6 +649,32 @@ class OCRValidatorGUI:
             )
 
         self._refresh_canvas()
+
+    def _maybe_save_failure(
+        self, roi_id: int, roi: ROIItem, use_accumulator_results: bool = False
+    ) -> None:
+        """Persist a diagnostic for a failed ROI.
+
+        Expected text is used here only to decide that this ROI failed and is
+        worth saving. It has already played no part in choosing a recognizer or
+        in the OCR result itself.
+        """
+        if roi.passed or not roi.expected.strip() or self.source_image is None:
+            return
+        # Accumulator results are merged across frames, so no single recorded
+        # image is "the" OCR input.
+        record = None if use_accumulator_results else self._ocr_inputs.get(roi_id)
+        try:
+            diagnostic_dir = _save_failed_roi_diagnostic(
+                self.source_image,
+                roi,
+                preprocess=self._roi_preprocess_config(),
+                model_info=self._resolved_model_info(),
+                ocr_input=record,
+            )
+            self._append_live_log(f"ROI{roi_id} FAILURE_SAVED={diagnostic_dir}")
+        except OSError as exc:
+            self._append_live_log(f"ROI{roi_id} FAILURE_SAVE_ERROR={exc}")
 
     def _append_result_summary(self, text_map: dict[int, str]):
         parts = []
@@ -679,26 +748,53 @@ class OCRValidatorGUI:
 
     def _evaluate_rois(self, frame_image: Image.Image):
         text_map: dict[int, str] = {}
+        self._ocr_inputs = {}
         for roi_id in sorted(self.rois):
             roi = self.rois[roi_id]
             ocr = self._run_roi_ocr(frame_image, roi.rect, roi.expected)
             text_map[roi_id] = ocr.text
+            if self._last_ocr_input is not None:
+                self._ocr_inputs[roi_id] = self._last_ocr_input
 
         self._render_result_map(text_map)
 
-    def _run_engine(self, image: Image.Image, expected_text: str):
+    def _run_engine(
+        self,
+        image: Image.Image,
+        expected_text: str,
+        record_as: str | None = None,
+    ):
+        """Run OCR on ``image``.
+
+        When ``record_as`` is given, the exact pixels passed to the engine are
+        copied and stashed on ``self._last_ocr_input`` before inference. The
+        copy matters: the caller may reuse or mutate the image afterwards, and
+        the recorded input has to stay byte-identical to what was recognized.
+        """
+        language = self.language_var.get()
+        if record_as is not None:
+            self._last_ocr_input = OCRInputRecord(
+                image=image.copy(),
+                path_kind=record_as,
+                language=language,
+                exact=(record_as == "direct"),
+            )
         result = self.engine.run(
             image,
-            self.language_var.get(),
+            language,
             preserve_small_left_noise=has_ui_image_token(expected_text),
         )
+        if record_as is not None and self._last_ocr_input is not None:
+            # Raw recognizer output, before the expected-aware UI normalization.
+            self._last_ocr_input.raw_ocr_text = result.text
         result.text = normalize_ocr_ui_text(result.text, expected_text)
         return result
 
     def _run_roi_ocr(self, frame_image: Image.Image, roi_rect: Rect, expected_text: str = ""):
+        self._last_ocr_input = None
         if not self.context_detect_var.get():
             crop = self._crop_roi(frame_image, roi_rect)
-            direct_ocr = self._run_engine(crop, expected_text)
+            direct_ocr = self._run_engine(crop, expected_text, record_as="direct")
             if direct_ocr.boxes:
                 return direct_ocr
             return self._run_context_roi_ocr(
@@ -728,14 +824,14 @@ class OCRValidatorGUI:
         cy2 = min(img_h, y2 + context_margin)
 
         context_crop = frame_image.crop((cx1, cy1, cx2, cy2))
-        context_ocr = self._run_engine(context_crop, expected_text)
+        context_ocr = self._run_engine(context_crop, expected_text, record_as="context")
 
         if not context_ocr.boxes:
             if fallback_result is not None:
                 return fallback_result
             # Fallback to direct ROI mode when context detect finds nothing.
             direct_crop = self._crop_roi(frame_image, roi_rect)
-            return self._run_engine(direct_crop, expected_text)
+            return self._run_engine(direct_crop, expected_text, record_as="context_fallback")
 
         filtered = []
         for box in context_ocr.boxes:
@@ -748,7 +844,7 @@ class OCRValidatorGUI:
             if fallback_result is not None:
                 return fallback_result
             direct_crop = self._crop_roi(frame_image, roi_rect)
-            return self._run_engine(direct_crop, expected_text)
+            return self._run_engine(direct_crop, expected_text, record_as="context_fallback")
 
         text, mean_score = self.engine.text_from_boxes(filtered)
         context_ocr.text = normalize_ocr_ui_text(text, expected_text)
@@ -1102,6 +1198,8 @@ class OCRValidatorGUI:
 
             if not roi.passed and roi.expected.strip() and self.source_image is not None:
                 try:
+                    # Scroll results are merged from many frames, so no single
+                    # recorded image is the input: save a reconstruction only.
                     diagnostic_dir = _save_failed_roi_diagnostic(
                         self.source_image,
                         roi,

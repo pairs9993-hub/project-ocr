@@ -60,7 +60,10 @@ class OcrInputDiagnosticTests(unittest.TestCase):
         # The OCR input carries the 8px margin the raw ROI crop does not.
         self.assertEqual(raw_size, (250, 120))
         self.assertNotEqual(ocr_size, raw_size)
-        self.assertTrue(metadata["roi_ocr_input_is_exact"])
+        # Recomputed from the source image, so it must not claim to be exact.
+        self.assertEqual(
+            metadata["ocr_input_fidelity"], "representative_or_reconstructed_not_exact"
+        )
         self.assertEqual(metadata["preprocess"]["margin"], 8)
         self.assertEqual(metadata["roi_raw_size"], [250, 120])
 
@@ -73,5 +76,5 @@ class OcrInputDiagnosticTests(unittest.TestCase):
             metadata = json.loads((saved_dir / "metadata.json").read_text(encoding="utf-8"))
             self.assertFalse((saved_dir / "roi_ocr_input.png").exists())
 
-        self.assertFalse(metadata["roi_ocr_input_is_exact"])
+        self.assertNotIn("ocr_input_fidelity", metadata)
         self.assertNotIn("preprocess", metadata)

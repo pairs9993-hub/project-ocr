@@ -2,17 +2,27 @@
 
 Fidelity
 --------
-A saved failure diagnostic stores ``source_image.crop(roi.rect)`` -- the ROI
-rect only. The GUI, however, feeds the recognizer a *margin-expanded* crop
-(default 8px on each side) before padding and upscaling. Those margin pixels
-are outside the saved PNG and cannot be recovered from it.
+Three input modes, in descending order of trustworthiness:
 
-Replaying a saved ``roi.png`` is therefore **approximate**, not an exact
-reproduction of the original OCR input, and every result is tagged
-``replay_fidelity="approximate_saved_roi"``. Passing ``--source-image`` and
-``--rect`` instead reconstructs the true OCR input through the shared
-:mod:`ocr_roi_validator.roi_preprocess` helpers and is tagged
-``"exact_runtime_input"``.
+``--ocr-input roi_ocr_input.png``
+    The pixels the GUI recorded at the moment it called ``OCREngine.run()``.
+    Fed to the recognizers verbatim -- no margin, padding or upscaling is
+    applied, because all of that already happened before the image was
+    recorded. Tagged ``exact_recorded_ocr_input``. This is the only mode that
+    reproduces a real run.
+
+``--source-image`` + ``--rect``
+    Recomputes the crop from a full screen image through the shared
+    :mod:`ocr_roi_validator.roi_preprocess` helpers. Faithful to the current
+    preprocessing settings, but it is a reconstruction: nothing proves the
+    original run used these same settings. Tagged
+    ``reconstructed_runtime_input``.
+
+``--roi roi.png``
+    A saved failure diagnostic stores ``source_image.crop(roi.rect)`` -- the
+    ROI rect only. The GUI feeds the recognizer a *margin-expanded* crop
+    (default 8px per side), and those margin pixels are outside the saved PNG
+    and unrecoverable from it. Tagged ``approximate_saved_roi``.
 
 This tool never guesses or synthesises the missing margin.
 
@@ -120,12 +130,19 @@ def build_engine(package_dir: Path, language: str, recognizer: Path) -> OCREngin
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     source = parser.add_argument_group("input (choose one)")
+    source.add_argument(
+        "--ocr-input",
+        type=Path,
+        help="roi_ocr_input.png recorded at the OCR call site (exact replay)",
+    )
     source.add_argument("--roi", type=Path, help="saved roi.png (approximate replay)")
     source.add_argument(
-        "--source-image", type=Path, help="full screen image (exact replay, with --rect)"
+        "--source-image",
+        type=Path,
+        help="full screen image (reconstructed replay, with --rect)",
     )
     source.add_argument(
-        "--rect", help="x1,y1,x2,y2 ROI rect within --source-image (exact replay)"
+        "--rect", help="x1,y1,x2,y2 ROI rect within --source-image"
     )
     parser.add_argument("--metadata", type=Path, help="optional metadata.json for reporting")
     parser.add_argument("--package", type=Path, required=True)
@@ -146,12 +163,16 @@ def main() -> int:
     parser.add_argument("--out-json", type=Path)
     args = parser.parse_args()
 
-    if args.source_image and args.rect:
-        fidelity = "exact_runtime_input"
+    if args.ocr_input:
+        fidelity = "exact_recorded_ocr_input"
+    elif args.source_image and args.rect:
+        fidelity = "reconstructed_runtime_input"
     elif args.roi:
         fidelity = "approximate_saved_roi"
     else:
-        parser.error("provide --roi, or --source-image together with --rect")
+        parser.error(
+            "provide --ocr-input, or --roi, or --source-image together with --rect"
+        )
 
     config = RoiPreprocessConfig(
         margin=args.margin,
@@ -164,7 +185,12 @@ def main() -> int:
     if args.metadata and args.metadata.is_file():
         expected = json.loads(args.metadata.read_text(encoding="utf-8")).get("expected")
 
-    if fidelity == "exact_runtime_input":
+    if fidelity == "exact_recorded_ocr_input":
+        with Image.open(args.ocr_input) as handle:
+            base_image = handle.convert("RGB")
+        rect = None
+        roi_path = str(args.ocr_input)
+    elif fidelity == "reconstructed_runtime_input":
         with Image.open(args.source_image) as handle:
             full_image = handle.convert("RGB")
         rect = tuple(int(v) for v in args.rect.split(","))
@@ -198,7 +224,11 @@ def main() -> int:
         perturbed = perturb(base_image, kind)
         perturbed_size = list(perturbed.size)
 
-        if fidelity == "exact_runtime_input":
+        if fidelity == "exact_recorded_ocr_input":
+            # Already the recognizer's input: margin, padding and upscaling all
+            # happened before it was recorded. Re-applying them would corrupt it.
+            ocr_input = perturbed
+        elif fidelity == "reconstructed_runtime_input":
             ocr_input = crop_roi(perturbed, rect, config)
         else:
             # No surrounding pixels exist, so the margin step cannot be applied.
@@ -223,8 +253,11 @@ def main() -> int:
             "original_size": original_size,
             "perturbed_size": perturbed_size,
             "ocr_input_size": ocr_input_size,
-            "preprocess": config.as_dict(),
-            "margin_applied": fidelity == "exact_runtime_input",
+            "preprocess": (
+                None if fidelity == "exact_recorded_ocr_input" else config.as_dict()
+            ),
+            "preprocess_reapplied": fidelity != "exact_recorded_ocr_input",
+            "margin_applied": fidelity == "reconstructed_runtime_input",
             "baseline": baseline_result.text,
             "specialist": specialist_result.text,
             "final": decision.final_text,
