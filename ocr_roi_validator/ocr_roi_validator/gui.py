@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import hashlib
 import json
 import sys
 import threading
@@ -22,6 +23,7 @@ from .compare import (
     normalize_ui_text,
 )
 from .ocr_engine import OCREngine
+from .roi_preprocess import RoiPreprocessConfig, crop_roi, pad_long_roi
 from .scroll_merge import AdaptiveFrameSampler, ScrollTextAccumulator, VerticalListAccumulator
 
 
@@ -29,15 +31,7 @@ Rect = tuple[int, int, int, int]
 
 
 def _pad_long_roi(image: Image.Image) -> Image.Image:
-    width, height = image.size
-    if width > height * 2:
-        padded = Image.new(image.mode, (width, (width + 1) // 2), image.getpixel((0, 0)))
-    elif height > width * 2:
-        padded = Image.new(image.mode, ((height + 1) // 2, height), image.getpixel((0, 0)))
-    else:
-        return image
-    padded.paste(image, (0, 0))
-    return padded
+    return pad_long_roi(image)
 
 
 def _absolute_selection_rect(
@@ -70,22 +64,44 @@ def _save_failed_roi_diagnostic(
     source_image: Image.Image,
     roi: ROIItem,
     output_root: Path = Path("captures") / "failures",
+    preprocess: RoiPreprocessConfig | None = None,
+    model_info: dict | None = None,
 ) -> Path:
+    """Save a failed ROI for later analysis.
+
+    ``roi.png`` is the ROI rect alone, as it has always been. When
+    ``preprocess`` is supplied the exact image handed to the recognizer is also
+    saved as ``roi_ocr_input.png``; that crop includes the margin pixels around
+    the rect, which ``roi.png`` does not contain and which cannot be
+    reconstructed from it afterwards.
+    """
     run_dir = output_root / f"failure_{datetime.now():%Y%m%d_%H%M%S_%f}_roi{roi.roi_id}"
     run_dir.mkdir(parents=True, exist_ok=False)
-    source_image.crop(roi.rect).save(run_dir / "roi.png")
+    raw_crop = source_image.crop(roi.rect)
+    raw_crop.save(run_dir / "roi.png")
+
+    metadata = {
+        "roi_id": roi.roi_id,
+        "rect": list(roi.rect),
+        "expected": roi.expected,
+        "actual": roi.actual,
+    }
+
+    if preprocess is not None:
+        ocr_input = crop_roi(source_image, roi.rect, preprocess)
+        ocr_input.save(run_dir / "roi_ocr_input.png")
+        metadata["preprocess"] = preprocess.as_dict()
+        metadata["roi_raw_size"] = list(raw_crop.size)
+        metadata["roi_ocr_input_size"] = list(ocr_input.size)
+        metadata["roi_ocr_input_is_exact"] = True
+    else:
+        metadata["roi_ocr_input_is_exact"] = False
+
+    if model_info:
+        metadata["models"] = model_info
+
     (run_dir / "metadata.json").write_text(
-        json.dumps(
-            {
-                "roi_id": roi.roi_id,
-                "rect": list(roi.rect),
-                "expected": roi.expected,
-                "actual": roi.actual,
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
-        + "\n",
+        json.dumps(metadata, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
     return run_dir
@@ -616,32 +632,50 @@ class OCRValidatorGUI:
             parsed = default
         return max(min_value, min(max_value, parsed))
 
+    def _roi_preprocess_config(self) -> RoiPreprocessConfig:
+        return RoiPreprocessConfig(
+            margin=self._safe_int(
+                self.roi_margin_var.get(), default=8, min_value=0, max_value=80
+            ),
+            min_side=self._safe_int(
+                self.min_roi_side_var.get(), default=160, min_value=32, max_value=640
+            ),
+            pad_long_roi=bool(self.fast_long_roi_var.get()),
+            auto_upscale=bool(self.auto_upscale_var.get()),
+        )
+
     def _crop_roi(self, image: Image.Image, rect: Rect) -> Image.Image:
-        x1, y1, x2, y2 = rect
-        margin = self._safe_int(self.roi_margin_var.get(), default=8, min_value=0, max_value=80)
-        min_side = self._safe_int(self.min_roi_side_var.get(), default=160, min_value=32, max_value=640)
+        return crop_roi(image, rect, self._roi_preprocess_config())
 
-        img_w, img_h = image.size
-        ex1 = max(0, x1 - margin)
-        ey1 = max(0, y1 - margin)
-        ex2 = min(img_w, x2 + margin)
-        ey2 = min(img_h, y2 + margin)
+    def _resolved_model_info(self) -> dict:
+        """Absolute paths and SHA-256 of the models actually in use.
 
-        crop = image.crop((ex1, ey1, ex2, ey2))
-        if self.fast_long_roi_var.get():
-            crop = _pad_long_roi(crop)
-        if not self.auto_upscale_var.get():
-            return crop
+        Recorded in failure diagnostics so a saved failure can be tied to the
+        exact binaries that produced it. Best-effort: a hashing failure must
+        never prevent the diagnostic itself from being written.
+        """
+        package = getattr(self.engine, "package", None)
+        if package is None:
+            return {}
 
-        c_w, c_h = crop.size
-        short_side = min(c_w, c_h)
-        if short_side >= min_side:
-            return crop
+        def describe(path) -> dict:
+            try:
+                resolved = Path(path).resolve()
+                digest = hashlib.sha256(resolved.read_bytes()).hexdigest()
+                return {"path": str(resolved), "sha256": digest}
+            except OSError as exc:
+                return {"path": str(path), "error": str(exc)}
 
-        scale = float(min_side) / float(max(1, short_side))
-        new_w = max(1, int(round(c_w * scale)))
-        new_h = max(1, int(round(c_h * scale)))
-        return crop.resize((new_w, new_h), Image.Resampling.BICUBIC)
+        info: dict = {"language": self.language_var.get()}
+        try:
+            info["detector"] = describe(package.detector_model)
+            info["dictionary"] = describe(package.dictionary)
+            info["recognizers"] = {
+                name: describe(path) for name, path in package.recognizers.items()
+            }
+        except AttributeError:
+            return info
+        return info
 
     def _evaluate_rois(self, frame_image: Image.Image):
         text_map: dict[int, str] = {}
@@ -1068,7 +1102,12 @@ class OCRValidatorGUI:
 
             if not roi.passed and roi.expected.strip() and self.source_image is not None:
                 try:
-                    diagnostic_dir = _save_failed_roi_diagnostic(self.source_image, roi)
+                    diagnostic_dir = _save_failed_roi_diagnostic(
+                        self.source_image,
+                        roi,
+                        preprocess=self._roi_preprocess_config(),
+                        model_info=self._resolved_model_info(),
+                    )
                     self._append_live_log(f"ROI{roi_id} FAILURE_SAVED={diagnostic_dir}")
                 except OSError as exc:
                     self._append_live_log(f"ROI{roi_id} FAILURE_SAVE_ERROR={exc}")

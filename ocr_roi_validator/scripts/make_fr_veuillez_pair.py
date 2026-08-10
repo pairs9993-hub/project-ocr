@@ -1,9 +1,20 @@
-"""Build a normal/defect evaluation pair matching the real failure ROI.
+"""Render a synthetic normal/defect evaluation pair for the Veuillez case.
 
-The real captured ROI supplies the normal case (screen text is genuinely
-``Veuillez``). There is no captured screen whose text is genuinely
-``Véuillez``, so the defect counterpart is rendered synthetically to match the
-captured ROI's font, size, colours and crop geometry as closely as possible.
+**Both images are synthetic.** The captured ROI is not used as the normal
+image; it is only read to borrow two properties -- the canvas size and the
+sampled background/foreground colours. The text itself is re-rendered from
+scratch in a fixed font (Segoe UI 21px by default) at fixed line spacing and
+offsets, which are *not* measured from the capture and are unlikely to match
+the product's real typography.
+
+What this pair can and cannot show:
+
+* It can show whether a recognizer, given a rendering of ``Véuillez``, reports
+  the accent rather than silently normalising it away. That is useful
+  supporting evidence for defect safety.
+* It cannot prove how the product behaves on a real screen typo. The glyph
+  shapes, hinting and subpixel rendering differ from the real UI, so a passing
+  result here is corroboration, not proof.
 
 Real screen images are used for evaluation only; nothing here is training data.
 """
@@ -97,15 +108,33 @@ def main() -> int:
             {
                 "name": name,
                 "path": str(path),
+                "synthetic": True,
                 "visible_text": "\n".join(visible),
                 # Expected is always the correct product string; for the defect
                 # image the visible text deliberately differs from it.
                 "expected": "\n".join(LINES_NORMAL),
-                "size": list(size),
-                "font": args.font,
+                "reference_roi": str(args.reference_roi),
+                "derived_from_reference_roi": ["canvas_size", "background_color", "foreground_color"],
+                "not_derived_from_reference_roi": [
+                    "font_family",
+                    "font_size",
+                    "line_spacing",
+                    "top_offset",
+                    "glyph_rendering",
+                ],
+                "renderer": "PIL.ImageDraw.text",
+                "font_path": args.font,
                 "font_size": args.font_size,
-                "background": list(background),
-                "foreground": list(foreground),
+                "line_spacing": args.line_spacing,
+                "top_offset": args.top_offset,
+                "canvas_size": list(size),
+                "sampled_background": list(background),
+                "sampled_foreground": list(foreground),
+                "evidence_status": (
+                    "Supporting evidence for defect safety only. Typography is fixed, "
+                    "not measured from the capture, so results here do not prove product "
+                    "behaviour on a real on-screen typo."
+                ),
             }
         )
         print(f"wrote {path}  visible={'|'.join(visible)}")

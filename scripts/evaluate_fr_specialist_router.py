@@ -26,6 +26,15 @@ When the router applies the specialist nowhere, the routed run must be
 byte-identical to the baseline run. That invariant is asserted rather than
 assumed, and a violation fails the gate.
 
+Fail-closed
+-----------
+The evaluator refuses to score data it cannot pair exactly. Empty input,
+duplicate row keys, keys present on only one side, and rows whose identity
+fields (reference, filename, language, category, state, visible_text,
+expected) disagree between the two runs are all fatal rather than warnings --
+scoring an intersection would silently hide missing data. A failing gate exits
+non-zero by default; ``--report-only`` is the explicit opt-out.
+
 Expected text is carried into the output rows for reporting and for defect
 false-pass accounting, but it is never passed to the router.
 """
@@ -152,22 +161,128 @@ def category_false_passes(rows: list[dict], prediction_key: str) -> dict[str, di
     }
 
 
-def build_rows(baseline_rows: list[dict], specialist_rows: list[dict]) -> list[dict]:
-    """Route each common row and score baseline / specialist / final identically."""
-    baseline_by_key = {row_key(row): row for row in baseline_rows}
-    specialist_by_key = {row_key(row): row for row in specialist_rows}
-    common = sorted(set(baseline_by_key) & set(specialist_by_key))
-    missing = sorted(set(baseline_by_key) - set(specialist_by_key))
-    extra = sorted(set(specialist_by_key) - set(baseline_by_key))
-    if missing or extra:
+class AlignmentError(Exception):
+    """Raised when the two runs cannot be paired row for row."""
+
+    def __init__(self, message: str, details: dict) -> None:
+        super().__init__(message)
+        self.details = details
+
+
+# Fields that identify a row. If two runs disagree on any of these for the same
+# key, they did not evaluate the same thing and must not be compared.
+IDENTITY_FIELDS = (
+    "reference",
+    "filename",
+    "language",
+    "category",
+    "state",
+    "visible_text",
+    "expected",
+)
+
+
+def index_rows(rows: list[dict], side: str) -> tuple[dict[str, dict], list[str]]:
+    """Index rows by key, collecting duplicates rather than silently overwriting."""
+    indexed: dict[str, dict] = {}
+    duplicates: list[str] = []
+    for row in rows:
+        key = row_key(row)
+        if key in indexed:
+            duplicates.append(key)
+            continue
+        indexed[key] = row
+    if duplicates:
         print(
-            f"warning: row key mismatch (baseline-only={len(missing)}, "
-            f"specialist-only={len(extra)})",
+            f"error: {side} contains duplicate row keys: {sorted(set(duplicates))[:10]}",
             file=sys.stderr,
         )
+    return indexed, sorted(set(duplicates))
+
+
+def compare_identity(baseline_row: dict, specialist_row: dict) -> list[str]:
+    """Return the identity fields on which two rows for the same key disagree.
+
+    A field present on one side and absent on the other counts as a mismatch:
+    that is a provenance difference, not a harmless omission.
+    """
+    mismatched: list[str] = []
+    for field in IDENTITY_FIELDS:
+        present_baseline = field in baseline_row
+        present_specialist = field in specialist_row
+        if present_baseline != present_specialist:
+            mismatched.append(f"{field}(presence)")
+        elif present_baseline and baseline_row[field] != specialist_row[field]:
+            mismatched.append(field)
+    return mismatched
+
+
+def align_runs(baseline_rows: list[dict], specialist_rows: list[dict]) -> tuple[list[str], dict]:
+    """Validate that the two runs pair exactly, or raise.
+
+    Returns the sorted shared keys and an alignment report. Any missing key,
+    extra key, duplicate key, empty input or identity mismatch is fatal: the
+    evaluator must never quietly score a subset of the data.
+    """
+    baseline_by_key, baseline_duplicates = index_rows(baseline_rows, "baseline")
+    specialist_by_key, specialist_duplicates = index_rows(specialist_rows, "specialist")
+
+    missing = sorted(set(baseline_by_key) - set(specialist_by_key))
+    extra = sorted(set(specialist_by_key) - set(baseline_by_key))
+    shared = sorted(set(baseline_by_key) & set(specialist_by_key))
+
+    mismatches: dict[str, list[str]] = {}
+    for key in shared:
+        fields = compare_identity(baseline_by_key[key], specialist_by_key[key])
+        if fields:
+            mismatches[key] = fields
+
+    report = {
+        "baseline_input_rows": len(baseline_rows),
+        "specialist_input_rows": len(specialist_rows),
+        "baseline_indexed_rows": len(baseline_by_key),
+        "specialist_indexed_rows": len(specialist_by_key),
+        "duplicate_keys_baseline": baseline_duplicates,
+        "duplicate_keys_specialist": specialist_duplicates,
+        "missing_keys": missing,
+        "extra_keys": extra,
+        "metadata_mismatches": mismatches,
+        "scored_rows": len(shared),
+    }
+
+    problems = []
+    if not baseline_rows:
+        problems.append("baseline run has no rows after filtering")
+    if not specialist_rows:
+        problems.append("specialist run has no rows after filtering")
+    if baseline_duplicates:
+        problems.append(f"{len(baseline_duplicates)} duplicate key(s) in baseline")
+    if specialist_duplicates:
+        problems.append(f"{len(specialist_duplicates)} duplicate key(s) in specialist")
+    if missing:
+        problems.append(f"{len(missing)} key(s) missing from specialist")
+    if extra:
+        problems.append(f"{len(extra)} key(s) only in specialist")
+    if mismatches:
+        problems.append(f"{len(mismatches)} row(s) with mismatched identity fields")
+    if not shared:
+        problems.append("no shared rows to score")
+
+    if problems:
+        raise AlignmentError("; ".join(problems), report)
+    return shared, report
+
+
+def build_rows(
+    baseline_rows: list[dict], specialist_rows: list[dict]
+) -> tuple[list[dict], dict]:
+    """Route each paired row and score baseline / specialist / final identically."""
+    baseline_by_key = {row_key(row): row for row in baseline_rows}
+    specialist_by_key = {row_key(row): row for row in specialist_rows}
+    shared, alignment = align_runs(baseline_rows, specialist_rows)
 
     rows: list[dict] = []
-    for key in common:
+    for key in shared:
         baseline_row = baseline_by_key[key]
         specialist_row = specialist_by_key[key]
         reference = str(baseline_row.get("reference", ""))
@@ -201,7 +316,7 @@ def build_rows(baseline_rows: list[dict], specialist_rows: list[dict]) -> list[d
                 **{f"final_{k}": v for k, v in final_scores.items()},
             }
         )
-    return rows
+    return rows, alignment
 
 
 def check_identity_invariant(rows: list[dict]) -> dict:
@@ -259,7 +374,14 @@ def main() -> int:
     parser.add_argument("--report-dir", type=Path, required=True)
     parser.add_argument("--label", default="routed")
     parser.add_argument("--language", choices=("fr", "es"))
-    parser.add_argument("--fail-on-gate", action="store_true")
+    parser.add_argument(
+        "--report-only",
+        action="store_true",
+        help=(
+            "write the report and exit 0 even if gates fail. Without this flag a "
+            "failing gate or a broken alignment exits non-zero."
+        ),
+    )
     args = parser.parse_args()
 
     baseline_rows = load_jsonl(args.baseline)
@@ -268,7 +390,40 @@ def main() -> int:
         baseline_rows = [r for r in baseline_rows if r.get("language") == args.language]
         specialist_rows = [r for r in specialist_rows if r.get("language") == args.language]
 
-    rows = build_rows(baseline_rows, specialist_rows)
+    try:
+        rows, alignment = build_rows(baseline_rows, specialist_rows)
+    except AlignmentError as exc:
+        print(f"ALIGNMENT FAILED: {exc}", file=sys.stderr)
+        args.report_dir.mkdir(parents=True, exist_ok=True)
+        (args.report_dir / "promotion_gate.json").write_text(
+            json.dumps(
+                {
+                    "inputs": {
+                        "baseline": str(args.baseline),
+                        "specialist": str(args.specialist),
+                        "label": args.label,
+                        "language": args.language,
+                    },
+                    "alignment": exc.details,
+                    "alignment_error": str(exc),
+                    "gates": {"alignment": False},
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        for field in ("duplicate_keys_baseline", "duplicate_keys_specialist",
+                      "missing_keys", "extra_keys"):
+            values = exc.details.get(field) or []
+            if values:
+                print(f"  {field}: {len(values)} e.g. {values[:5]}", file=sys.stderr)
+        mismatches = exc.details.get("metadata_mismatches") or {}
+        for key, fields in list(mismatches.items())[:5]:
+            print(f"  metadata mismatch {key}: {fields}", file=sys.stderr)
+        print("gates=FAIL")
+        return 1
 
     args.out_jsonl.parent.mkdir(parents=True, exist_ok=True)
     with args.out_jsonl.open("w", encoding="utf-8") as handle:
@@ -334,6 +489,7 @@ def main() -> int:
             "and final by the same code path. Stored cer/verdict fields in the input "
             "JSONL are not reused."
         ),
+        "alignment": alignment,
         "baseline": baseline_summary,
         "specialist": specialist_summary,
         "final": final_summary,
@@ -357,6 +513,15 @@ def main() -> int:
     )
     (args.report_dir / "PROMOTION_GATE.md").write_text(render_markdown(report), encoding="utf-8")
 
+    print(
+        f"alignment: baseline_in={alignment['baseline_input_rows']} "
+        f"specialist_in={alignment['specialist_input_rows']} "
+        f"scored={alignment['scored_rows']} "
+        f"duplicates={len(alignment['duplicate_keys_baseline'])}"
+        f"/{len(alignment['duplicate_keys_specialist'])} "
+        f"missing={len(alignment['missing_keys'])} extra={len(alignment['extra_keys'])} "
+        f"metadata_mismatches={len(alignment['metadata_mismatches'])}"
+    )
     print(f"rows={final_summary['rows']} specialist_applied={invariant['specialist_applied_count']}")
     for route, count in routes.items():
         print(f"  {route}: {count}")
@@ -379,7 +544,10 @@ def main() -> int:
     print(f"gates={'PASS' if passed else 'FAIL'}")
     print(f"wrote {args.out_jsonl}")
     print(f"wrote {args.report_dir}")
-    return 1 if args.fail_on_gate and not passed else 0
+    if passed:
+        return 0
+    # Fail closed: a failing gate is a non-zero exit unless explicitly opted out.
+    return 0 if args.report_only else 1
 
 
 def render_markdown(report: dict) -> str:
@@ -390,6 +558,17 @@ def render_markdown(report: dict) -> str:
         f"- specialist: `{report['inputs']['specialist']}`",
         "",
         report["metric_note"],
+        "",
+        "## Alignment",
+        "",
+        f"- baseline input rows: {report['alignment']['baseline_input_rows']}",
+        f"- specialist input rows: {report['alignment']['specialist_input_rows']}",
+        f"- scored rows: {report['alignment']['scored_rows']}",
+        f"- duplicate keys (baseline): {len(report['alignment']['duplicate_keys_baseline'])}",
+        f"- duplicate keys (specialist): {len(report['alignment']['duplicate_keys_specialist'])}",
+        f"- missing keys: {len(report['alignment']['missing_keys'])}",
+        f"- extra keys: {len(report['alignment']['extra_keys'])}",
+        f"- metadata mismatches: {len(report['alignment']['metadata_mismatches'])}",
         "",
         "## Metrics (all recomputed by the same code path)",
         "",
