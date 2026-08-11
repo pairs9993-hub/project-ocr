@@ -1,54 +1,40 @@
 """Image-based e / é / unknown verification for a single glyph.
 
 The text router cannot tell a hallucinated accent from a real one: both look
-like the same string difference. This module answers the question from pixels
-instead, by asking whether the glyph actually rises into the accent band.
+like the same string difference. This module answers the question from pixels.
 
-Method
-------
-Measuring ink inside the glyph box alone is not enough: at UI resolution the
-acute accent touches the letter body, so there is no blank separator row to
-find, and an ``e`` and an ``é`` have similar ink density.
+Why not measure ink height directly
+-----------------------------------
+An earlier prototype compared the glyph's top edge against the *line's* ink
+extent. That failed badly: any capital or ascender elsewhere on the line raises
+the reference band and buries a genuine accent, so it erased about half of all
+real accents on a font holdout.
 
-What does separate them is *where the glyph sits within its own text line*. A
-lowercase ``e`` occupies the x-height band and its top edge sits well below the
-line's ascender height. An ``é`` carries a mark that reaches up into the
-ascender band. So the discriminant is the glyph's top edge measured against the
-line's own ink extent -- a ratio, and therefore independent of font size,
-resolution and the crop's exact bounds.
+The fix is to make the measurement local. The features below are computed from
+the glyph crop alone and are scale-free, so neither the line's other characters
+nor the font size can shift them.
+
+Model
+-----
+A small logistic classifier over those features, fitted on synthetic glyphs only
+and shipped as frozen coefficients. Inference needs nothing but numpy, so the
+runtime has no new dependency and the decision is reproducible.
 
 Scope and safety
 ----------------
-* Only ``é`` -> ``e`` is ever proposed. The reverse is impossible by
-  construction: this module is only ever asked about a predicted ``é``, and
-  never reports ``é`` for a glyph read as ``e``.
-* Anything ambiguous returns :data:`UNKNOWN` and the caller keeps the baseline.
-  Refusing to answer is safe; guessing is not.
+* Only ``é`` -> ``e`` is ever proposed. This module is asked exclusively about
+  glyphs the recognizer already read as ``é``; it never converts ``e`` to ``é``.
+* A verdict of ``é`` or ``unknown`` leaves the baseline untouched. The abstain
+  band is deliberately wide: refusing to answer is safe, guessing is not.
 * i/l, digits, timers and punctuation are out of scope.
-* No expected text, reference string or dictionary is an input. The verdict is
-  a function of pixels alone.
-
-Thresholds come from Latin script geometry -- an accent occupies the band above
-the x-height -- and are not fitted to any captured UI image.
-
-.. warning::
-
-   **This prototype fails its synthetic holdout and must not be used at
-   runtime.**
-
-   On the exact target ROI it is correct on every perturbation, but that is
-   partly luck: the reference band is the *line's* ink extent, so any capital
-   or ascender elsewhere on the line (``É``, ``l``, ``d``, ``t``) raises the
-   top of that band and pushes a genuine ``é`` down into the "bare e" range.
-   Across a 4-font holdout it erased 53 of 104 real accents. A line-relative
-   measurement cannot separate the two classes; a usable verifier needs a
-   per-glyph baseline and x-height estimate, or a small classifier trained on
-   synthetic glyphs.
+* No expected text, reference string or dictionary is an input.
 """
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 
@@ -57,6 +43,10 @@ __all__ = [
     "ACCENT_ABSENT",
     "UNKNOWN",
     "AccentVerdict",
+    "AccentModel",
+    "extract_features",
+    "FEATURE_NAMES",
+    "load_model",
     "verify_accent_glyph",
 ]
 
@@ -64,15 +54,20 @@ ACCENT_PRESENT = "é"
 ACCENT_ABSENT = "e"
 UNKNOWN = "unknown"
 
-# Where the glyph's top edge sits inside the line's ink band, as a fraction of
-# that band's height. An accented glyph reaches close to the top; a bare `e`
-# starts around the x-height, roughly a third of the way down.
-ACCENT_TOP_RATIO = 0.18
-BARE_TOP_RATIO = 0.28
+FEATURE_NAMES = (
+    "aspect_ratio",          # ink height / ink width
+    "upper_ink_fraction",    # ink in the top third, over total ink
+    "upper_gap_fraction",    # tallest ink-free run in the upper half
+    "top_row_density",       # ink density of the topmost ink row
+    "upper_width_fraction",  # width of upper-third ink, over glyph ink width
+    "vertical_centroid",     # centre of ink mass, 0 = top
+)
 
-# Guard rails: below these sizes the measurement is not meaningful.
 MIN_GLYPH_WIDTH = 4
-MIN_LINE_INK_HEIGHT = 10
+MIN_INK_HEIGHT = 7
+MIN_INK_PIXELS = 12
+
+DEFAULT_MODEL_PATH = Path(__file__).with_name("accent_model.json")
 
 
 @dataclass(frozen=True)
@@ -80,7 +75,7 @@ class AccentVerdict:
     """Outcome of inspecting one glyph."""
 
     verdict: str
-    top_ratio: float
+    probability_absent: float
     reason: str
 
     @property
@@ -89,9 +84,55 @@ class AccentVerdict:
         return self.verdict == ACCENT_ABSENT
 
 
+@dataclass(frozen=True)
+class AccentModel:
+    """Frozen logistic model over :data:`FEATURE_NAMES`."""
+
+    weights: tuple[float, ...]
+    bias: float
+    absent_threshold: float
+    present_threshold: float
+    version: str = "unversioned"
+
+    def probability_absent(self, features: np.ndarray) -> float:
+        z = float(np.dot(np.asarray(self.weights), features) + self.bias)
+        return 1.0 / (1.0 + np.exp(-z))
+
+    def to_dict(self) -> dict:
+        return {
+            "version": self.version,
+            "feature_names": list(FEATURE_NAMES),
+            "weights": list(self.weights),
+            "bias": self.bias,
+            "absent_threshold": self.absent_threshold,
+            "present_threshold": self.present_threshold,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict) -> "AccentModel":
+        names = tuple(payload.get("feature_names", FEATURE_NAMES))
+        if names != FEATURE_NAMES:
+            raise ValueError(
+                f"model features {names} do not match {FEATURE_NAMES}"
+            )
+        return cls(
+            weights=tuple(float(w) for w in payload["weights"]),
+            bias=float(payload["bias"]),
+            absent_threshold=float(payload["absent_threshold"]),
+            present_threshold=float(payload["present_threshold"]),
+            version=str(payload.get("version", "unversioned")),
+        )
+
+
+def load_model(path: Path | None = None) -> AccentModel | None:
+    path = path or DEFAULT_MODEL_PATH
+    if not Path(path).is_file():
+        return None
+    return AccentModel.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
+
+
 def _to_grayscale(image: np.ndarray) -> np.ndarray:
     if image.ndim == 3:
-        # Luma; channel order is irrelevant for a presence test.
         return image[..., :3].mean(axis=2)
     return image.astype(np.float64)
 
@@ -107,63 +148,93 @@ def _ink_mask(gray: np.ndarray) -> np.ndarray:
     return bright if bright.mean() < 0.5 else ~bright
 
 
-def verify_accent_glyph(
-    line_image: np.ndarray,
-    x0: int,
-    x1: int,
-) -> AccentVerdict:
-    """Decide whether the glyph at ``[x0:x1]`` of ``line_image`` has an accent.
+def extract_features(glyph: np.ndarray) -> np.ndarray | None:
+    """Scale-free shape features for one glyph crop, or None if unusable.
 
-    The whole line is required, not just the glyph crop: the verdict depends on
-    where the glyph sits relative to the line's own ink band.
-
-    There is deliberately no parameter for the expected character.
+    Everything is measured inside the glyph's own ink bounding box and divided
+    by that box's size, so the values do not depend on font size, line height
+    or how generous the crop was.
     """
-    if line_image is None or line_image.size == 0:
-        return AccentVerdict(UNKNOWN, 0.0, "empty_line_image")
+    if glyph is None or glyph.size == 0:
+        return None
+    height, width = glyph.shape[:2]
+    if width < MIN_GLYPH_WIDTH:
+        return None
 
-    height, width = line_image.shape[:2]
-    x0 = max(0, int(x0))
-    x1 = min(width, int(x1))
-    if x1 - x0 < MIN_GLYPH_WIDTH:
-        return AccentVerdict(UNKNOWN, 0.0, f"glyph_too_narrow_{x1 - x0}")
+    ink = _ink_mask(_to_grayscale(glyph))
+    if ink.sum() < MIN_INK_PIXELS:
+        return None
 
-    ink = _ink_mask(_to_grayscale(line_image))
-    if not ink.any():
-        return AccentVerdict(UNKNOWN, 0.0, "no_ink_in_line")
+    rows = np.where(ink.any(axis=1))[0]
+    columns = np.where(ink.any(axis=0))[0]
+    top, bottom = int(rows[0]), int(rows[-1])
+    left, right = int(columns[0]), int(columns[-1])
+    ink_height = bottom - top + 1
+    ink_width = right - left + 1
+    if ink_height < MIN_INK_HEIGHT or ink_width < MIN_GLYPH_WIDTH:
+        return None
 
-    line_rows = np.where(ink.any(axis=1))[0]
-    line_top, line_bottom = int(line_rows[0]), int(line_rows[-1])
-    line_ink_height = line_bottom - line_top + 1
-    if line_ink_height < MIN_LINE_INK_HEIGHT:
-        return AccentVerdict(UNKNOWN, 0.0, f"line_ink_height_{line_ink_height}")
+    box = ink[top : bottom + 1, left : right + 1]
+    total_ink = float(box.sum())
+    if total_ink <= 0:
+        return None
 
-    glyph = ink[:, x0:x1]
-    if not glyph.any():
-        return AccentVerdict(UNKNOWN, 0.0, "no_ink_in_glyph")
+    third = max(1, int(round(ink_height / 3.0)))
+    upper = box[:third, :]
+    upper_ink = float(upper.sum())
 
-    # CTC spans are approximate and can clip a sliver of the neighbouring
-    # character. A stray column or two of that neighbour would raise the top
-    # edge and fake an accent, so ignore rows holding only a trace of ink.
-    row_counts = glyph.sum(axis=1)
-    glyph_width = x1 - x0
-    min_row_ink = max(2, int(np.ceil(glyph_width * 0.20)))
-    substantial = np.where(row_counts >= min_row_ink)[0]
-    if substantial.size == 0:
-        return AccentVerdict(UNKNOWN, 0.0, "glyph_ink_too_sparse")
+    # Tallest ink-free horizontal run in the upper half: an accent is separated
+    # from the letter body by a gap, at least at larger sizes.
+    half = max(1, ink_height // 2)
+    row_has_ink = box[:half, :].any(axis=1)
+    longest_gap = current = 0
+    for has_ink in row_has_ink:
+        current = 0 if has_ink else current + 1
+        longest_gap = max(longest_gap, current)
 
-    glyph_top = int(substantial[0])
-    glyph_bottom = int(substantial[-1])
+    upper_columns = np.where(upper.any(axis=0))[0]
+    upper_width = len(upper_columns)
 
-    # A glyph whose body sits above the line's baseline band is not the
-    # lowercase letter we were asked about.
-    if glyph_bottom < line_top + line_ink_height * 0.4:
-        return AccentVerdict(UNKNOWN, 0.0, "glyph_does_not_reach_baseline_band")
+    row_indices = np.arange(box.shape[0])
+    centroid = float((box.sum(axis=1) * row_indices).sum() / total_ink)
 
-    top_ratio = (glyph_top - line_top) / float(line_ink_height)
+    return np.array(
+        [
+            ink_height / float(ink_width),
+            upper_ink / total_ink,
+            longest_gap / float(ink_height),
+            float(box[0, :].sum()) / float(ink_width),
+            upper_width / float(ink_width),
+            centroid / float(ink_height),
+        ],
+        dtype=np.float64,
+    )
 
-    if top_ratio <= ACCENT_TOP_RATIO:
-        return AccentVerdict(ACCENT_PRESENT, top_ratio, "glyph_reaches_accent_band")
-    if top_ratio >= BARE_TOP_RATIO:
-        return AccentVerdict(ACCENT_ABSENT, top_ratio, "glyph_starts_at_x_height")
-    return AccentVerdict(UNKNOWN, top_ratio, "ambiguous_glyph_top")
+
+def verify_accent_glyph(
+    glyph: np.ndarray,
+    model: AccentModel | None = None,
+) -> AccentVerdict:
+    """Decide whether ``glyph`` carries an acute accent.
+
+    ``glyph`` is a crop around a single character, as located by CTC alignment.
+    There is deliberately no parameter for the expected character.
+
+    Without a fitted model the answer is always :data:`UNKNOWN`, so a missing
+    model file degrades to "change nothing" rather than to guessing.
+    """
+    if model is None:
+        model = load_model()
+    if model is None:
+        return AccentVerdict(UNKNOWN, 0.0, "no_model_available")
+
+    features = extract_features(glyph)
+    if features is None:
+        return AccentVerdict(UNKNOWN, 0.0, "glyph_unmeasurable")
+
+    probability = model.probability_absent(features)
+    if probability >= model.absent_threshold:
+        return AccentVerdict(ACCENT_ABSENT, probability, "confident_no_accent")
+    if probability <= model.present_threshold:
+        return AccentVerdict(ACCENT_PRESENT, probability, "confident_accent")
+    return AccentVerdict(UNKNOWN, probability, "below_confidence_margin")

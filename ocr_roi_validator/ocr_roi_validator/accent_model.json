@@ -1,0 +1,22 @@
+{
+  "version": "accent-v1",
+  "feature_names": [
+    "aspect_ratio",
+    "upper_ink_fraction",
+    "upper_gap_fraction",
+    "top_row_density",
+    "upper_width_fraction",
+    "vertical_centroid"
+  ],
+  "weights": [
+    -1.9483979418280875,
+    2.237687273397622,
+    -29.799284319371164,
+    2.0938392921853484,
+    3.3973994134825265,
+    -6.13675146583702
+  ],
+  "bias": 3.296526289681096,
+  "absent_threshold": 0.9572995013696037,
+  "present_threshold": 0.001
+}
