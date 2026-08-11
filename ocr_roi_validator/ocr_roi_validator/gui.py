@@ -673,6 +673,28 @@ class OCRValidatorGUI:
                 ocr_input=record,
             )
             self._append_live_log(f"ROI{roi_id} FAILURE_SAVED={diagnostic_dir}")
+            # Say plainly whether this capture can be used as an exact target
+            # input, so nobody has to read metadata.json to find out.
+            if record is not None and record.exact:
+                self._append_live_log(
+                    f"ROI{roi_id} CAPTURE=USABLE (exact recognizer input recorded)"
+                )
+            else:
+                if use_accumulator_results:
+                    reason = "scroll/live result merged from multiple frames"
+                    hint = "use Run Once with Context Detect OFF"
+                elif record is None:
+                    reason = "no OCR input recorded for this ROI"
+                    hint = "use Run Once with Context Detect OFF"
+                elif record.path_kind == "context_fallback":
+                    reason = "detector found no text in the ROI, so context fallback ran"
+                    hint = "enlarge the ROI around the text and retry Run Once"
+                else:
+                    reason = f"OCR ran via '{record.path_kind}', not the direct ROI path"
+                    hint = "turn Context Detect OFF and use Run Once"
+                self._append_live_log(
+                    f"ROI{roi_id} CAPTURE=NOT USABLE ({reason}); {hint}"
+                )
         except OSError as exc:
             self._append_live_log(f"ROI{roi_id} FAILURE_SAVE_ERROR={exc}")
 

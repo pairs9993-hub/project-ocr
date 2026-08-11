@@ -264,3 +264,95 @@ class ReplayFidelityLabelTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CaptureCheckerTests(unittest.TestCase):
+    """The capture checker must accept only genuinely usable captures."""
+
+    CHECKER = VALIDATOR_ROOT / "scripts" / "check_target_capture.py"
+
+    def _write_capture(self, root: Path, name: str, metadata: dict, with_image=True) -> None:
+        directory = root / name
+        directory.mkdir(parents=True)
+        (directory / "metadata.json").write_text(
+            json.dumps(metadata, ensure_ascii=False), encoding="utf-8"
+        )
+        if with_image:
+            make_image(40, 20).save(directory / "roi_ocr_input.png")
+
+    def _good_metadata(self) -> dict:
+        return {
+            "ocr_input_fidelity": "exact_recorded_ocr_input",
+            "ocr_path": "direct",
+            "language": "fr",
+            "expected": "Veuillez allumer l'eau.",
+            "actual": "Véuillez allumer l'eau.",
+            "ocr_raw_output": "Véuillez allumer l'eau.",
+            "roi_ocr_input_size": [320, 160],
+            "models": {
+                "detector": {
+                    "sha256": "21af37f36ce3940ba2fd201c6035571ae5807cf0333f1734d6d5b95c62135b7c"
+                },
+                "dictionary": {
+                    "sha256": "7ff72cdde593c6f80ebd573dddb67b1a103a1607a444c11c4b2b7db57ae1d627"
+                },
+                "recognizers": {
+                    "fr": {
+                        "sha256": "d6a439c2b59b46051ea3e07a9d7df69cb76589489b4e487b3d365a773b903b0d"
+                    }
+                },
+            },
+        }
+
+    def _run(self, root: Path):
+        return subprocess.run(
+            [sys.executable, str(self.CHECKER), "--failures-dir", str(root)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+        )
+
+    def test_good_capture_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self._write_capture(root, "failure_1_roi1", self._good_metadata())
+            result = self._run(root)
+        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        self.assertIn("USABLE CAPTURE FOUND", result.stdout)
+
+    def test_reconstructed_capture_rejected(self) -> None:
+        metadata = self._good_metadata()
+        metadata["ocr_input_fidelity"] = "representative_or_reconstructed_not_exact"
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self._write_capture(root, "failure_1_roi1", metadata)
+            result = self._run(root)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("NO USABLE CAPTURE", result.stdout)
+
+    def test_context_path_rejected(self) -> None:
+        metadata = self._good_metadata()
+        metadata["ocr_path"] = "context_fallback"
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self._write_capture(root, "failure_1_roi1", metadata)
+            result = self._run(root)
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_empty_actual_rejected(self) -> None:
+        metadata = self._good_metadata()
+        metadata["actual"] = ""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self._write_capture(root, "failure_1_roi1", metadata)
+            result = self._run(root)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("actual is empty", result.stdout)
+
+    def test_wrong_model_hash_reported(self) -> None:
+        metadata = self._good_metadata()
+        metadata["models"]["recognizers"]["fr"]["sha256"] = "0" * 64
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self._write_capture(root, "failure_1_roi1", metadata)
+            result = self._run(root)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("MODEL HASH MISMATCH", result.stdout)
