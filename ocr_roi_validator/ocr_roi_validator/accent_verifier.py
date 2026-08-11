@@ -38,6 +38,8 @@ from pathlib import Path
 
 import numpy as np
 
+from .accent_localization import LocalizationConfig, assess_localization
+
 __all__ = [
     "ACCENT_PRESENT",
     "ACCENT_ABSENT",
@@ -48,6 +50,7 @@ __all__ = [
     "FEATURE_NAMES",
     "load_model",
     "verify_accent_glyph",
+    "verify_accent_in_line",
 ]
 
 ACCENT_PRESENT = "é"
@@ -222,6 +225,10 @@ def verify_accent_glyph(
 
     Without a fitted model the answer is always :data:`UNKNOWN`, so a missing
     model file degrades to "change nothing" rather than to guessing.
+
+    This judges the crop as given. Callers that have the surrounding line
+    should prefer :func:`verify_accent_in_line`, which first checks that the
+    crop really isolates one glyph.
     """
     if model is None:
         model = load_model()
@@ -238,3 +245,64 @@ def verify_accent_glyph(
     if probability <= model.present_threshold:
         return AccentVerdict(ACCENT_PRESENT, probability, "confident_accent")
     return AccentVerdict(UNKNOWN, probability, "below_confidence_margin")
+
+
+def verify_accent_in_line(
+    line_image: np.ndarray,
+    x0: int,
+    x1: int,
+    model: AccentModel | None = None,
+    median_span_width: float | None = None,
+    localization: LocalizationConfig | None = None,
+) -> AccentVerdict:
+    """Verify a glyph, refusing whenever the crop cannot be trusted.
+
+    Three things must agree before a correction is licensed:
+
+    1. the span looks like one isolated character (localization gate),
+    2. the classifier is confident there is no accent, and
+    3. that verdict survives small changes to the crop bounds.
+
+    The third check matters because CTC spans are approximate: a verdict that
+    flips when the crop moves by a pixel or two was resting on a boundary
+    artefact rather than on the glyph. Any disagreement yields
+    :data:`UNKNOWN`, which leaves the baseline untouched.
+    """
+    if model is None:
+        model = load_model()
+    if model is None:
+        return AccentVerdict(UNKNOWN, 0.0, "no_model_available")
+
+    config = localization or LocalizationConfig()
+    report = assess_localization(line_image, x0, x1, median_span_width, config)
+    if not report.usable:
+        return AccentVerdict(UNKNOWN, 0.0, f"localization:{','.join(report.reasons)}")
+
+    width = line_image.shape[1]
+    primary = verify_accent_glyph(line_image[:, x0:x1], model)
+    if primary.verdict != ACCENT_ABSENT:
+        # Only an "absent" verdict can change text, so only it needs the
+        # extra scrutiny below.
+        return primary
+
+    jitter = max(1, int(config.jitter_pixels))
+    for left_shift, right_shift in (
+        (-jitter, 0), (jitter, 0), (0, -jitter), (0, jitter), (-jitter, jitter),
+    ):
+        shifted_x0 = max(0, x0 + left_shift)
+        shifted_x1 = min(width, x1 + right_shift)
+        if shifted_x1 - shifted_x0 < 4:
+            return AccentVerdict(
+                UNKNOWN, primary.probability_absent, "jitter_span_degenerate"
+            )
+        variant = verify_accent_glyph(line_image[:, shifted_x0:shifted_x1], model)
+        if variant.verdict != ACCENT_ABSENT:
+            return AccentVerdict(
+                UNKNOWN,
+                primary.probability_absent,
+                f"jitter_disagreement:{variant.verdict}",
+            )
+
+    return AccentVerdict(
+        ACCENT_ABSENT, primary.probability_absent, "confident_no_accent_localized"
+    )

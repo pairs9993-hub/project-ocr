@@ -42,7 +42,14 @@ FONT_SPLITS = {
         "georgia.ttf", "trebuc.ttf", "corbel.ttf", "Candara.ttf",
     ],
     "validation": ["tahoma.ttf", "ebrima.ttf"],
+    # `holdout` was consumed as diagnostic data once a failure was inspected in
+    # it. `holdout_v2` is its untouched replacement and shares no typeface with
+    # any earlier split.
     "holdout": ["verdana.ttf", "gadugi.ttf", "micross.ttf", "seguisb.ttf"],
+    "holdout_v2": [
+        "constan.ttf", "framd.ttf", "LSANS.TTF", "pala.ttf",
+        "BOOKOS.TTF", "GARA.TTF", "CENTURY.TTF", "ANTQUAB.TTF",
+    ],
 }
 
 # Phrase templates, also split. Templates deliberately contain no `e` or `é` of
@@ -67,6 +74,13 @@ TEMPLATE_SPLITS = {
         "{} puis validu",
         "Statut du {} 30 min",
     ],
+    "holdout_v2": [
+        "Bloc {} A1",
+        "{} avant tri",
+        "Signal du {}, 2,5",
+        "I'{} manual",
+        "{}",
+    ],
 }
 
 # Word pairs: (accented spelling, unaccented spelling). Each word uses exactly
@@ -82,12 +96,18 @@ WORD_SPLITS = {
         ("réparé", "repare"), ("mélangé", "melange"),
         ("dégagé", "degage"), ("sévéré", "severe"),
     ],
+    "holdout_v2": [
+        ("créé", "cree"), ("prévénu", "prevenu"),
+        ("étété", "etete"), ("rélévé", "releve"),
+        ("dénéigé", "deneige"), ("téléphoné", "telephone"),
+    ],
 }
 
 SIZE_SPLITS = {
     "train": [15, 17, 19, 21, 24],
     "validation": [16, 20],
     "holdout": [18, 22, 26],
+    "holdout_v2": [14, 23, 25, 28],
 }
 
 
@@ -244,7 +264,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--package", type=Path, required=True)
     parser.add_argument("--language", default="fr")
-    parser.add_argument("--split", choices=("train", "validation", "holdout"),
+    parser.add_argument("--split", choices=("train", "validation", "holdout", "holdout_v2"),
                         required=True)
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument("--samples", type=int, default=400,
@@ -256,7 +276,8 @@ def main() -> int:
     # Seeds are split too, so a holdout rendering can never repeat a train one.
     seed = args.seed
     if seed is None:
-        seed = {"train": 1000, "validation": 5000, "holdout": 9000}[args.split]
+        seed = {"train": 1000, "validation": 5000, "holdout": 9000,
+                "holdout_v2": 24000}[args.split]
     rng = random.Random(seed)
 
     # The labelling rule assumes each rendering contains exactly one e-form.

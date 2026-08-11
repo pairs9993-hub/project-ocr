@@ -27,12 +27,14 @@ VALIDATOR_ROOT = Path(__file__).resolve().parents[1]
 if str(VALIDATOR_ROOT) not in sys.path:
     sys.path.insert(0, str(VALIDATOR_ROOT))
 
+from ocr_roi_validator.accent_localization import LocalizationConfig  # noqa: E402
 from ocr_roi_validator.accent_verifier import (  # noqa: E402
     ACCENT_ABSENT,
     ACCENT_PRESENT,
     UNKNOWN,
     load_model,
     verify_accent_glyph,
+    verify_accent_in_line,
 )
 
 
@@ -46,6 +48,11 @@ def main() -> int:
     parser.add_argument("--split-dir", type=Path, required=True)
     parser.add_argument("--model", type=Path, required=True)
     parser.add_argument("--out-json", type=Path)
+    parser.add_argument(
+        "--no-localization-guard",
+        action="store_true",
+        help="score the bare classifier, without the accent-v2 guard",
+    )
     args = parser.parse_args()
 
     payload = args.model.read_text(encoding="utf-8")
@@ -54,6 +61,18 @@ def main() -> int:
         print(f"no model at {args.model}", file=sys.stderr)
         return 1
     digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    use_guard = not args.no_localization_guard
+    guard_config = LocalizationConfig()
+
+    def judge(image):
+        """accent-v2 decision: localization guard, then classifier, then jitter."""
+        if image is None or not use_guard:
+            return verify_accent_glyph(image, model)
+        # The saved crop is the span; treat its full width as the span bounds.
+        return verify_accent_in_line(
+            image, 0, image.shape[1], model, localization=guard_config
+        )
 
     manifest = json.loads(
         (args.split_dir / "manifest.json").read_text(encoding="utf-8")
@@ -76,7 +95,7 @@ def main() -> int:
     for sample in samples:
         triggered = sample["predicted_char"] == "é"
         image = cv2.imread(str(args.split_dir / sample["file"]))
-        result = verify_accent_glyph(image, model)
+        result = judge(image)
         if result.reason == "glyph_unmeasurable":
             unmeasurable += 1
 

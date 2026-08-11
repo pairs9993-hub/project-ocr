@@ -1,0 +1,15 @@
+{
+  "version": "accent-v2",
+  "frozen_at_utc": "2026-08-11T21:16:26.148132+00:00",
+  "classifier_model": "accent_model.json",
+  "classifier_version": "accent-v1 (unchanged)",
+  "localization": {
+    "min_width_ratio": 0.55,
+    "max_width_ratio": 1.9,
+    "max_centre_offset_ratio": 0.22,
+    "min_ink_width_ratio": 0.3,
+    "reject_ink_on_both_edges": true,
+    "jitter_pixels": 2
+  },
+  "note": "Localization guard added ahead of the unchanged accent-v1 classifier. Guard thresholds were chosen from validation geometry statistics only; diagnostic_v1 and the target ROI were not used to set any value."
+}
