@@ -66,7 +66,15 @@ def main() -> int:
     unmeasurable = 0
     false_correction_examples = []
 
+    # The verifier is only ever consulted about glyphs the recognizer read as
+    # `é`; a glyph it read as `e` is never offered for correction. Scoring the
+    # whole split therefore over-counts, so both figures are reported: the
+    # in-scope one is the gate, the whole-split one is context.
+    in_scope_accent_total = in_scope_accent_false = 0
+    in_scope_hallucinations = in_scope_caught = 0
+
     for sample in samples:
+        triggered = sample["predicted_char"] == "é"
         image = cv2.imread(str(args.split_dir / sample["file"]))
         result = verify_accent_glyph(image, model)
         if result.reason == "glyph_unmeasurable":
@@ -74,8 +82,12 @@ def main() -> int:
 
         if sample["visual_label"] == "é":
             accent_total += 1
+            if triggered:
+                in_scope_accent_total += 1
             if result.verdict == ACCENT_ABSENT:
                 accent_false += 1
+                if triggered:
+                    in_scope_accent_false += 1
                 if len(false_correction_examples) < 10:
                     false_correction_examples.append(
                         {
@@ -83,6 +95,7 @@ def main() -> int:
                             "font": sample["font"],
                             "size": sample["size"],
                             "probability_absent": result.probability_absent,
+                            "in_scope": triggered,
                         }
                     )
             elif result.verdict == ACCENT_PRESENT:
@@ -91,6 +104,10 @@ def main() -> int:
                 accent_unknown += 1
         else:
             bare_total += 1
+            if triggered:
+                in_scope_hallucinations += 1
+                if result.is_accent_absent:
+                    in_scope_caught += 1
             if result.verdict == ACCENT_ABSENT:
                 bare_correct += 1
             elif result.verdict == UNKNOWN:
@@ -98,20 +115,19 @@ def main() -> int:
             else:
                 bare_wrong += 1
 
-    # Correction coverage counts only glyphs the recognizer actually misread as
-    # an accent: those are the ones a verifier could repair.
     hallucinated = [s for s in samples
                     if s["visual_label"] == "e" and s["predicted_char"] == "é"]
-    caught = 0
-    for sample in hallucinated:
-        image = cv2.imread(str(args.split_dir / sample["file"]))
-        if verify_accent_glyph(image, model).is_accent_absent:
-            caught += 1
+    caught = in_scope_caught
 
     upper_bound = (
         rule_of_three_upper_bound(accent_total)
         if accent_false == 0
         else accent_false / accent_total
+    )
+    in_scope_upper_bound = (
+        rule_of_three_upper_bound(in_scope_accent_total)
+        if in_scope_accent_false == 0
+        else in_scope_accent_false / max(1, in_scope_accent_total)
     )
 
     print(f"split      : {args.split_dir}")
@@ -134,18 +150,32 @@ def main() -> int:
     print(f"recognizer hallucinations in split : {len(hallucinated)}")
     print(f"  of those, verifier would fix     : {caught}")
     print()
+    print("IN SCOPE (recognizer predicted é -- the only glyphs ever offered):")
+    print(f"  real accents in scope        : {in_scope_accent_total}")
+    print(f"  false corrections in scope   : {in_scope_accent_false}")
+    if in_scope_accent_false == 0:
+        print(f"  rate 0/{in_scope_accent_total}, "
+              f"95% upper bound {in_scope_upper_bound:.2%}")
+    else:
+        print(f"  rate {in_scope_accent_false}/{in_scope_accent_total} "
+              f"= {in_scope_upper_bound:.2%}")
+    print()
+    print("WHOLE SPLIT (includes glyphs the verifier is never asked about):")
     if accent_false == 0:
-        print(f"false-correction rate: 0/{accent_total}, "
+        print(f"  false-correction rate: 0/{accent_total}, "
               f"95% upper bound {upper_bound:.2%}")
     else:
-        print(f"false-correction rate: {accent_false}/{accent_total} "
+        print(f"  false-correction rate: {accent_false}/{accent_total} "
               f"= {upper_bound:.2%}")
-        for example in false_correction_examples:
-            print(f"    {example['file']} {example['font']} {example['size']}pt "
-                  f"p={example['probability_absent']:.4f}")
+    for example in false_correction_examples:
+        scope = "in-scope" if example["in_scope"] else "out-of-scope"
+        print(f"    [{scope}] {example['file']} {example['font']} "
+              f"{example['size']}pt p={example['probability_absent']:.4f}")
 
-    passed = accent_false == 0
-    print(f"\nGATE (zero false corrections): {'PASS' if passed else 'FAIL'}")
+    # The gate is the in-scope count: those are the corrections that could
+    # actually reach a user.
+    passed = in_scope_accent_false == 0
+    print(f"\nGATE (zero in-scope false corrections): {'PASS' if passed else 'FAIL'}")
 
     if args.out_json:
         args.out_json.parent.mkdir(parents=True, exist_ok=True)
@@ -168,6 +198,11 @@ def main() -> int:
                     "hallucinations": len(hallucinated),
                     "hallucinations_caught": caught,
                     "false_correction_rate_upper_95": upper_bound,
+                    "in_scope_accent_total": in_scope_accent_total,
+                    "in_scope_false_corrections": in_scope_accent_false,
+                    "in_scope_false_correction_rate_upper_95": in_scope_upper_bound,
+                    "in_scope_hallucinations": in_scope_hallucinations,
+                    "in_scope_hallucinations_caught": in_scope_caught,
                     "passed": passed,
                 },
                 ensure_ascii=False,
