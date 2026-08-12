@@ -50,6 +50,20 @@ FONT_SPLITS = {
         "constan.ttf", "framd.ttf", "LSANS.TTF", "pala.ttf",
         "BOOKOS.TTF", "GARA.TTF", "CENTURY.TTF", "ANTQUAB.TTF",
     ],
+    # accent-v3 splits. train_v3 pools the typefaces already burned as
+    # development data (train/validation/diagnostic_v1/v2), which is sound
+    # because those are the fonts whose failure modes are understood.
+    # final_holdout_v3 is sealed and reserves fonts none of them ever saw.
+    "train_v3": [
+        "arial.ttf", "calibri.ttf", "segoeui.ttf", "times.ttf",
+        "georgia.ttf", "trebuc.ttf", "corbel.ttf", "Candara.ttf",
+        "verdana.ttf", "gadugi.ttf", "micross.ttf", "seguisb.ttf",
+    ],
+    "validation_v3": ["tahoma.ttf", "ebrima.ttf", "GARA.TTF", "pala.ttf"],
+    "final_holdout_v3": [
+        "constan.ttf", "framd.ttf", "LSANS.TTF", "BOOKOS.TTF",
+        "CENTURY.TTF", "ANTQUAB.TTF", "BELL.TTF", "l_10646.ttf",
+    ],
 }
 
 # Phrase templates, also split. Templates deliberately contain no `e` or `é` of
@@ -81,6 +95,31 @@ TEMPLATE_SPLITS = {
         "I'{} manual",
         "{}",
     ],
+    # v3 templates deliberately supply the neighbour contexts that broke
+    # earlier versions: capitals and ascenders on the same line, apostrophes
+    # and tall glyphs directly beside the target, digits and punctuation.
+    "train_v3": [
+        "{}",
+        "Vous {} localis",
+        "Absorption {} habitul",
+        "L'{} du bac 1,5",
+        "Tk {} biffl",
+        "{}: tud 30",
+        "Il {} lla",
+        "{} kd/hb 2,5",
+    ],
+    "validation_v3": [
+        "Application {} tot",
+        "H'{} ktb 1,5",
+        "{} du top",
+    ],
+    "final_holdout_v3": [
+        "Manual du {} A1",
+        "{}, points 4,5",
+        "Db'{} hkli",
+        "Bloc {} 30",
+        "{}",
+    ],
 }
 
 # Word pairs: (accented spelling, unaccented spelling). Each word uses exactly
@@ -101,6 +140,21 @@ WORD_SPLITS = {
         ("étété", "etete"), ("rélévé", "releve"),
         ("dénéigé", "deneige"), ("téléphoné", "telephone"),
     ],
+    "train_v3": [
+        ("réglagé", "reglage"), ("élémént", "element"), ("décalé", "decale"),
+        ("vérifiér", "verifier"), ("sécurité", "securite"), ("détécté", "detecte"),
+        ("résérvé", "reserve"), ("général", "general"),
+        ("réparé", "repare"), ("mélangé", "melange"), ("dégagé", "degage"),
+        ("sévéré", "severe"), ("dénéigé", "deneige"),
+    ],
+    "validation_v3": [
+        ("répété", "repete"), ("préféré", "prefere"),
+        ("rélévé", "releve"), ("étété", "etete"),
+    ],
+    "final_holdout_v3": [
+        ("bébé", "bebe"), ("céréalé", "cereale"), ("pénétré", "penetre"),
+        ("réséqué", "reseque"), ("téméré", "temere"), ("végété", "vegete"),
+    ],
 }
 
 SIZE_SPLITS = {
@@ -108,6 +162,11 @@ SIZE_SPLITS = {
     "validation": [16, 20],
     "holdout": [18, 22, 26],
     "holdout_v2": [14, 23, 25, 28],
+    # v3 covers small sizes deliberately: that is where the accent is only a
+    # pixel or two and where accent-v2 failed.
+    "train_v3": [12, 13, 15, 17, 19, 21, 24, 27],
+    "validation_v3": [14, 16, 20, 26],
+    "final_holdout_v3": [11, 18, 22, 23, 25, 30],
 }
 
 
@@ -264,7 +323,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--package", type=Path, required=True)
     parser.add_argument("--language", default="fr")
-    parser.add_argument("--split", choices=("train", "validation", "holdout", "holdout_v2"),
+    parser.add_argument("--split",
+                        choices=tuple(FONT_SPLITS),
                         required=True)
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument("--samples", type=int, default=400,
@@ -276,8 +336,13 @@ def main() -> int:
     # Seeds are split too, so a holdout rendering can never repeat a train one.
     seed = args.seed
     if seed is None:
-        seed = {"train": 1000, "validation": 5000, "holdout": 9000,
-                "holdout_v2": 24000}[args.split]
+        seed = {
+            "train": 1000, "validation": 5000, "holdout": 9000,
+            "holdout_v2": 24000,
+            # v3 seed ranges do not overlap any earlier split.
+            "train_v3": 100000, "validation_v3": 200000,
+            "final_holdout_v3": 300000,
+        }[args.split]
     rng = random.Random(seed)
 
     # The labelling rule assumes each rendering contains exactly one e-form.
