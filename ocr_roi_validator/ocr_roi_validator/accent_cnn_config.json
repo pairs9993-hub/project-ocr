@@ -1,0 +1,49 @@
+{
+  "version": "accent-v3",
+  "frozen_at_utc": "2026-08-12T13:33:39Z",
+  "onnx_file": "accent_v3.onnx",
+  "onnx_sha256": "26ff23a786bfd62fb50b15e32355084a672194b90c890c183c78a147157793fb",
+  "onnx_bytes": 131467,
+  "parameters": 32306,
+  "opset": 11,
+  "input_config": {
+    "height": 32,
+    "width": 24,
+    "accent_band_fraction": 0.45,
+    "accent_height": 16,
+    "accent_width": 24,
+    "interpolation": "area",
+    "pad_value": 0.0,
+    "jitter_pixels": 2
+  },
+  "absent_threshold": 0.9999930262565613,
+  "present_threshold": 0.05,
+  "training": {
+    "python": "3.8.20",
+    "torch": "2.1.2+cpu",
+    "cuda": false,
+    "seed": 1234,
+    "deterministic": true,
+    "epochs": 24,
+    "batch_size": 128,
+    "learning_rate": 0.002,
+    "accent_loss_weight": 6.0,
+    "train_dir": "..\\artifacts\\accent_ds\\train_v3",
+    "validation_dir": "..\\artifacts\\accent_ds\\validation_v3",
+    "train_glyphs": 7017,
+    "validation_glyphs": 3974
+  },
+  "validation": {
+    "accuracy_at_0p5": 0.9765978862606945,
+    "confusion_at_0p5": {
+      "accent_as_accent": 1659,
+      "accent_as_bare": 47,
+      "bare_as_bare": 2222,
+      "bare_as_accent": 46
+    },
+    "validation_highest_accent_probability": 0.9999929666519165,
+    "validation_bare_coverage_at_threshold": 0.12610229276895943,
+    "validation_false_corrections": 0,
+    "threshold_exceeds_representable_range": false
+  }
+}

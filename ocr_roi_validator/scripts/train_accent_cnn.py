@@ -98,16 +98,28 @@ def choose_threshold(probabilities: np.ndarray, labels: np.ndarray) -> tuple[flo
     accent_probabilities = probabilities[labels == 0.0]
     bare_probabilities = probabilities[labels == 1.0]
     highest_accent = float(accent_probabilities.max()) if accent_probabilities.size else 0.0
-    threshold = min(0.9995, highest_accent + 0.005)
+
+    # The threshold must clear the worst real accent outright. Capping it at
+    # some tidy value would quietly re-admit exactly the corrections this rule
+    # exists to forbid, so there is no cap: if the model cannot separate the
+    # classes, the threshold goes above 1.0 and coverage falls to zero. That
+    # is the correct outcome -- a verifier that never fires is safe, one that
+    # erases real accents is not.
+    # Step in float32, because that is the precision the probabilities carry:
+    # a float64 step above a float32 value rounds straight back to it when the
+    # comparison happens, leaving the worst accent exactly at the threshold.
+    threshold = float(np.nextafter(np.float32(highest_accent), np.float32(1.0)))
+    if not threshold > highest_accent:               # saturated at 1.0
+        threshold = float("inf")
     coverage = (
         float((bare_probabilities >= threshold).mean()) if bare_probabilities.size else 0.0
     )
+    false_corrections = int((accent_probabilities >= threshold).sum())
     return threshold, {
         "validation_highest_accent_probability": highest_accent,
         "validation_bare_coverage_at_threshold": coverage,
-        "validation_false_corrections": int(
-            (accent_probabilities >= threshold).sum()
-        ),
+        "validation_false_corrections": false_corrections,
+        "threshold_exceeds_representable_range": threshold >= 1.0,
     }
 
 
@@ -127,6 +139,9 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=1234)
     parser.add_argument("--version", default="accent-v3")
     parser.add_argument("--opset", type=int, default=11)
+    parser.add_argument("--reference-logits", type=Path,
+                        help="save PyTorch logits for the ONNX parity check")
+    parser.add_argument("--reference-samples", type=int, default=600)
     args = parser.parse_args()
 
     import torch
@@ -202,11 +217,36 @@ def main() -> int:
     print(f"validation confusion @0.5 : {confusion}")
 
     threshold, stats = choose_threshold(validation_probabilities, validation_y)
-    print(f"absent_threshold : {threshold:.6f}")
+    print(f"absent_threshold : {threshold:.9f}")
     for key, value in stats.items():
         print(f"  {key}: {value}")
 
+    # Fail closed: never write a model whose threshold would already convert a
+    # real accent on the very data the threshold was chosen from.
+    if stats["validation_false_corrections"] != 0:
+        print(
+            f"refusing to export: {stats['validation_false_corrections']} "
+            "validation false corrections at the chosen threshold",
+            file=sys.stderr,
+        )
+        return 1
+
     args.out_onnx.parent.mkdir(parents=True, exist_ok=True)
+
+    # Save PyTorch's own logits on a fixed slice of validation, so the parity
+    # check can compare against them later without needing torch. ONNX export
+    # folds BatchNorm into the convolutions, so the weights cannot simply be
+    # reloaded into the module afterwards.
+    if args.reference_logits:
+        reference_batch = validation_x[: args.reference_samples]
+        with torch.no_grad():
+            reference = network(torch.from_numpy(reference_batch)).numpy()
+        args.reference_logits.parent.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(
+            args.reference_logits, batch=reference_batch, logits=reference
+        )
+        print(f"wrote {args.reference_logits} ({reference.shape})")
+
     dummy = torch.zeros(1, 2, config.height, config.width)
     torch.onnx.export(
         network, dummy, str(args.out_onnx),
