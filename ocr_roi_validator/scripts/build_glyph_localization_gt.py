@@ -234,8 +234,15 @@ def main() -> int:
 
         gx0, gy0 = to_crop(glyph_box[0], glyph_box[1])
         gx1, gy1 = to_crop(glyph_box[2], glyph_box[3])
-        if not (0 <= gx0 < crop_w and 0 < gx1 <= crop_w + 1):
-            continue          # target fell outside the detected line
+        # The detector polygon often sits slightly inside the rendered text, so
+        # a target at the very start or end maps a pixel or two beyond the crop.
+        # Clamp those rather than discarding them; only reject a target that is
+        # genuinely outside the detected line. The stricter earlier form threw
+        # away roughly a third of otherwise usable renderings.
+        if gx1 <= 0 or gx0 >= crop_w or (gx1 - gx0) < 1.0:
+            continue
+        gx0 = max(0.0, gx0)
+        gx1 = min(float(crop_w), gx1)
 
         record = {
             "index": len(rows),
