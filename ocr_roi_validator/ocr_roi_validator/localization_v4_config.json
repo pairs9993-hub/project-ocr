@@ -1,0 +1,34 @@
+{
+  "version": "localization-v4",
+  "frozen_at_utc": "2026-08-14T09:18:31Z",
+  "frozen_on": "anchor_dev_v4 only (anchor_val_v4 not yet generated or inspected)",
+  "anchor": {
+    "primary": "consensus",
+    "fallback": "posterior_center",
+    "consensus_tolerance_pitch_fraction": 0.35,
+    "rationale": "consensus has the lowest p99 center error (1.555 vs 1.98) and the fewest misassignments (40); posterior_center is the best non-abstaining fallback (p95 0.333)"
+  },
+  "patch": {
+    "scale_source": "native_line_ink_height",
+    "half_width_coefficient": 0.75,
+    "rationale": "0.75x ink height keeps glyph containment failures at 1-3% across every ink-height bucket, removing the size dependence that 0.48x still showed (63% at 8-12px vs 5% at 33-44px)"
+  },
+  "known_cost": {
+    "intrusion_positive_rate_dev": 0.63,
+    "intrusion_p95_dev": 0.483,
+    "note": "a wider patch admits more neighbouring ink; a CNN trained on this input must learn to ignore it, which is why v4 requires retraining rather than reusing accent-v3"
+  },
+  "guard_unknown_conditions": [
+    "anchor candidates disagree beyond the pitch tolerance",
+    "anchor lands nearer a neighbour token than the target",
+    "patch clipped by the image edge",
+    "CTC sequence does not reconstruct the decoded text",
+    "no e/é token emitted at the target position",
+    "input preparation fails or the patch is empty"
+  ],
+  "explicitly_not_used": [
+    "raw CTC span width",
+    "line median span width",
+    "the 1.90 span ratio cap"
+  ]
+}
