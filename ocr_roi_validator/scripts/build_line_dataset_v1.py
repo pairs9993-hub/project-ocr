@@ -41,6 +41,12 @@ from ocr_roi_validator.line_verifier_input import (  # noqa: E402
     LineVerifierInputConfig,
     build_line_input,
 )
+from ocr_roi_validator.line_views import (  # noqa: E402
+    assert_runtime_view,
+    causal_audit_view,
+    label_neutral_bounds,
+    runtime_view,
+)
 from train_line_verifier import (  # noqa: E402
     CLASS_ACCENT_PRESENT,
     CLASS_BARE_E,
@@ -209,6 +215,7 @@ def main() -> int:
     buckets = Counter()
     label_counts = Counter()
     hard_cases = Counter()
+    provenance = Counter()
     attempts = 0
 
     def emit(line_bgr, probabilities, token, ordinal, decoded_length,
@@ -248,36 +255,30 @@ def main() -> int:
 
         style = make_style(base_text, font, size, rng)
 
-        # Crop geometry is computed once, from the accented member, and reused
-        # for both. Deriving it per-member would let the accent's extra ink
-        # move the crop and rescale the whole line, so the pair would differ
-        # everywhere instead of only at the accent -- which destroys exactly
-        # the causal isolation the pair exists to provide.
-        reference_page = render(accented_text, font, size, style)
-        reference_extent = ink_rows(reference_page)
-        if reference_extent is None:
-            continue
-        ink_height = reference_extent[1] - reference_extent[0] + 1
-        bucket = bucket_of(ink_height)
-        if bucket is None:
-            continue
-        margin = max(2, ink_height // 6)
-        top = max(0, reference_extent[0] - margin)
-        bottom = min(reference_page.height, reference_extent[1] + margin + 1)
-
+        # Each member is cropped from its own image only. Sharing geometry
+        # across the pair would put the counterpart's accent into a bare
+        # training image, which cannot happen at runtime where one image is all
+        # there is. The audit view, built from label-neutral font metrics, is
+        # what checks pair isolation -- it never becomes model input.
         pair = []
         for text, visual in ((base_text, "e"), (accented_text, "é")):
             page = render(text, font, size, style)
-            line = np.asarray(page)[top:bottom, :, ::-1].copy()
-            if line.shape[0] < 6 or line.shape[1] < 12:
+            view = runtime_view(page)
+            if view is None:
                 break
-            pair.append((text, visual, line, bucket, ink_height,
-                         char_centre(text, target_index, font, size, style)))
+            bucket = bucket_of(view.ink_height)
+            if bucket is None:
+                break
+            audit = causal_audit_view(page, text, font, size, style["offset"][1])
+            pair.append((text, visual, assert_runtime_view(view).image, bucket,
+                         view.ink_height,
+                         char_centre(text, target_index, font, size, style),
+                         audit))
         if len(pair) != 2:
             continue
 
         pair_serial += 1
-        for text, visual, line, bucket, ink_height, centre in pair:
+        for text, visual, line, bucket, ink_height, centre, audit in pair:
             crop_h, crop_w = line.shape[:2]
             max_wh_ratio = max(width / height, crop_w / crop_h)
             tensor = recognizer.resize_norm_img(line, max_wh_ratio)[np.newaxis, :]
@@ -290,8 +291,10 @@ def main() -> int:
             if not emitted or "".join(i["char"] for i in emitted) != decoded:
                 continue
 
-            # Query the token whose centre is nearest the true centre. The
-            # renderer supplies that centre; it never reaches the network.
+            # The query is an index into the baseline's own decoded tokens and
+            # a count of them -- both runtime quantities. The renderer's centre
+            # only picks which token to ask about; neither it nor the true
+            # character index is ever passed to the network.
             stride = crop_w / max(1, probabilities.shape[0])
             best, best_distance = None, None
             for index, item in enumerate(emitted):
@@ -300,7 +303,27 @@ def main() -> int:
                 if best_distance is None or distance < best_distance:
                     best, best_distance = index, distance
             if best is None:
+                provenance["no_target_token"] += 1
                 continue
+
+            # Provenance: what the baseline read here versus what was drawn.
+            # This decides which examples are runtime-relevant triggers.
+            predicted = unicodedata.normalize("NFC", emitted[best]["char"])
+            if visual == "e" and predicted == "é":
+                provenance["hallucination_visual_e_predicted_accent"] += 1
+            elif visual == "é" and predicted == "é":
+                provenance["preservation_visual_accent_predicted_accent"] += 1
+            elif visual == "e" and predicted == "e":
+                provenance["auxiliary_visual_e_predicted_e"] += 1
+            elif visual == "é" and predicted == "e":
+                provenance["baseline_miss_visual_accent_predicted_e"] += 1
+            else:
+                provenance["other_predicted_character"] += 1
+            # An ordinal only maps cleanly when the token count matches the
+            # rendered character count; otherwise an insertion or deletion has
+            # shifted everything after it.
+            if len(emitted) != len(unicodedata.normalize("NFC", text)):
+                provenance["ordinal_mapping_ambiguous"] += 1
 
             label = (CLASS_BARE_E if visual == "e" else CLASS_ACCENT_PRESENT)
             meta = {"font": Path(font).name, "size": size, "bucket": bucket,
@@ -309,6 +332,8 @@ def main() -> int:
                     # Identifies the two members of one counterfactual pair, so
                     # isolation can be audited without guessing from the text.
                     "pair_id": pair_serial,
+                    "view": "runtime_view",
+                    "audit_bounds": [audit.top, audit.bottom] if audit else None,
                     "case": "paired_counterfactual"}
             if emit(line, probabilities, emitted[best], best, len(emitted),
                     label, centre, meta):
@@ -358,6 +383,7 @@ def main() -> int:
         "buckets": dict(buckets),
         "label_counts": {str(k): v for k, v in label_counts.items()},
         "hard_cases": dict(hard_cases),
+        "query_provenance": dict(provenance),
         "input_config": config.as_dict(),
         "ground_truth_source": (
             "renderer: character centre from font advance metrics, accent from "
@@ -375,6 +401,7 @@ def main() -> int:
           f"BARE_E: {label_counts[CLASS_BARE_E]}, "
           f"UNKNOWN: {label_counts[CLASS_UNKNOWN]}}}")
     print(f"  hard cases  : {dict(hard_cases)}")
+    print(f"  provenance  : {dict(provenance)}")
     print(f"manifest sha256: {hashlib.sha256(payload.encode()).hexdigest()}")
     return 0
 
