@@ -35,6 +35,7 @@ from ocr_roi_validator.accent_cnn_verifier import (  # noqa: E402
     UNKNOWN,
     AccentCnnVerifier,
 )
+from ocr_roi_validator.ctc_geometry import v3_crop_bounds  # noqa: E402
 from ocr_roi_validator.model_package import load_model_package  # noqa: E402
 
 # The seven inputs fixed by Gate A. No others, and none removed.
@@ -157,8 +158,7 @@ def run_once(engine, package, labels, verifier, bgr: np.ndarray) -> dict:
             # Every predicted é is examined by the same rule.
             if unicodedata.normalize("NFC", item["char"]) != "é":
                 continue
-            x0 = max(0, int(math.floor((item["start"] + 0.5) * scale)) - 4)
-            x1 = min(crop_w, int(math.ceil((item["end"] + 1 + 0.5) * scale)) + 4)
+            x0, x1 = v3_crop_bounds(item["start"], item["end"], scale, crop_w)
             result = verifier.verify(crop, x0, x1, median_span)
             applied = result.is_accent_absent and position < len(characters)
             if applied:

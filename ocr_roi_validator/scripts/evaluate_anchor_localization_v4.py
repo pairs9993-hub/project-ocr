@@ -1,9 +1,12 @@
 """Compare x-anchor and context-patch strategies against rendered ground truth.
 
-Stage 3D-0 established that a CTC token span is not a glyph bounding box: one
-timestep covers ``8 * line_height / 48`` crop pixels, so a span's width tracks
-line height rather than glyph width, and the fixed 4px pad dominates at small
-sizes. This drops the span-as-box idea entirely.
+Stage 3D-0 established that a CTC token span is not a glyph bounding box.
+Consecutive timesteps are ``8 * line_height / 48`` crop pixels apart -- that is
+the horizontal *stride* between timestep centres, not a receptive field, which
+would need a per-layer calculation nobody here has done. Either way the spacing
+follows line height rather than glyph width, so a token span's width does too,
+and the fixed 4px pad dominates at small sizes. This drops the span-as-box idea
+entirely.
 
 Instead the CTC output is used only for *where* the character is -- an x-anchor
 -- and the crop around it is sized from measurable page geometry: the line's
@@ -42,6 +45,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 from build_accent_glyph_dataset import build_engine, load_labels  # noqa: E402
+from ocr_roi_validator.ctc_geometry import v3_crop_bounds  # noqa: E402
 
 ANCHORS = (
     "argmax_center",
@@ -52,7 +56,12 @@ ANCHORS = (
     "consensus",
 )
 PATCHES = (
-    "fixed_pad_4px",        # what accent-v3 used, kept only as a baseline
+    # The genuine accent-v3 crop: the collapsed token span widened by 4px on
+    # each side. An earlier revision of this file called a constant 8px window
+    # around the anchor "fixed_pad_4px", which is not what v3 does -- v3's
+    # width grows with the span. That name is corrected here and the parity is
+    # pinned by a unit test.
+    "v3_span_plus_4px",
     "ink_height_scaled",
     "pitch_scaled",
     "bounded_combined",
@@ -147,14 +156,27 @@ def anchor_candidates(
 
 def patch_candidates(
     anchor: float, ink_height: float, pitch: float, crop_w: int,
+    token: dict | None = None, stride: float | None = None,
 ) -> dict[str, tuple[float, float] | list[tuple[float, float]] | None]:
-    """Half-widths around the anchor, from geometry rather than token width."""
-    out: dict = {}
-    out["fixed_pad_4px"] = (anchor - 4.0, anchor + 4.0)
+    """Crops around the anchor, sized from geometry rather than token width.
 
-    # A lowercase letter is roughly 0.55 of the line's ink height wide; take a
-    # little more so the accent and both sidebearings are inside.
-    half_ink = 0.48 * ink_height
+    The v3 baseline is the exception: it is reproduced exactly, via the shared
+    ``v3_crop_bounds``, so the comparison is against what accent-v3 really
+    crops rather than an approximation of it.
+    """
+    out: dict = {}
+    if token is not None and stride is not None:
+        out["v3_span_plus_4px"] = tuple(
+            float(v) for v in v3_crop_bounds(token["start"], token["end"],
+                                             stride, crop_w)
+        )
+    else:
+        out["v3_span_plus_4px"] = None
+
+    # Sized from the line rather than the token. 0.75 was chosen on
+    # anchor_dev_v4: 0.48 still left 63% containment failures at 8-12px while
+    # 0.75 holds 1-3% across every bucket.
+    half_ink = 0.75 * ink_height
     out["ink_height_scaled"] = (anchor - half_ink, anchor + half_ink)
 
     half_pitch = 0.62 * pitch if pitch > 0 else half_ink
@@ -325,7 +347,8 @@ def main() -> int:
         # Patches are built on the consensus anchor when it fires, else the
         # posterior centre; both are runtime-computable.
         anchor_value = anchors["consensus"] or anchors["posterior_center"]
-        proposals = patch_candidates(anchor_value, ink_height, pitch, crop_w)
+        proposals = patch_candidates(anchor_value, ink_height, pitch, crop_w,
+                                     token=emitted[best], stride=scale)
         for name, proposal in proposals.items():
             if name == "multi_scale":
                 scores = [score_patch(s, glyph_mask, accent_mask, line, crop_w)
@@ -341,6 +364,8 @@ def main() -> int:
                 entry["scales_agree"] = all(
                     s["glyph_containment"] >= 0.95 for s in usable)
                 patch_rows[name].append({**entry, **_meta(sample)})
+            elif proposal is None:
+                patch_rows[name].append({"abstained": True, **_meta(sample)})
             else:
                 entry = score_patch(proposal, glyph_mask, accent_mask, line, crop_w)
                 patch_rows[name].append({**entry, **_meta(sample)})

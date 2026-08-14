@@ -64,19 +64,36 @@ class PatchScaleTests(unittest.TestCase):
         large_width = large_span[1] - large_span[0]
         self.assertAlmostEqual(large_width / small_width, 4.0, delta=0.01)
 
-    def test_fixed_pad_does_not_scale(self) -> None:
-        """The v3 baseline is size-blind, which is the defect v4 removes."""
-        small = patch_candidates(50.0, 10.0, 8.0, 200)["fixed_pad_4px"]
-        large = patch_candidates(50.0, 40.0, 32.0, 200)["fixed_pad_4px"]
-        self.assertEqual(small[1] - small[0], large[1] - large[0])
+    def test_v3_baseline_ignores_line_height(self) -> None:
+        """The v3 crop follows the token span, so line height does not move it.
 
-    def test_patch_is_centred_on_the_anchor(self) -> None:
-        for name, span in patch_candidates(73.0, 20.0, 16.0, 300).items():
-            if name == "multi_scale":
-                for entry in span:
-                    self.assertAlmostEqual((entry[0] + entry[1]) / 2, 73.0, places=6)
-            else:
-                self.assertAlmostEqual((span[0] + span[1]) / 2, 73.0, places=6)
+        That is the defect v4 removes: the glyph grows with the line but the
+        crop does not.
+        """
+        token = {"start": 6, "end": 7, "label": 1}
+        small = patch_candidates(50.0, 10.0, 8.0, 200, token=token,
+                                 stride=2.5)["v3_span_plus_4px"]
+        large = patch_candidates(50.0, 40.0, 32.0, 200, token=token,
+                                 stride=2.5)["v3_span_plus_4px"]
+        self.assertEqual(small, large)
+
+    def test_geometry_patches_are_centred_on_the_anchor(self) -> None:
+        """Every geometry-derived patch centres on the anchor.
+
+        The v3 baseline is excluded: it is centred on the token span, which is
+        precisely why it drifts from the glyph.
+        """
+        candidates = patch_candidates(73.0, 20.0, 16.0, 300)
+        for name, span in candidates.items():
+            if name == "v3_span_plus_4px":
+                continue
+            with self.subTest(patch=name):
+                if name == "multi_scale":
+                    for entry in span:
+                        self.assertAlmostEqual((entry[0] + entry[1]) / 2, 73.0,
+                                               places=6)
+                else:
+                    self.assertAlmostEqual((span[0] + span[1]) / 2, 73.0, places=6)
 
     def test_multi_scale_returns_increasing_widths(self) -> None:
         spans = patch_candidates(50.0, 20.0, 16.0, 300)["multi_scale"]
