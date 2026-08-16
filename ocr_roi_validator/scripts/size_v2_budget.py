@@ -196,6 +196,65 @@ def main() -> int:
     grand_total = (sum(b["total_renderings"] for b in budgets.values())
                    if identifiable else None)
 
+    # The per-font quotas read "each preflight font >= 20", not "each font in
+    # each stratum >= 20". Those differ by more than an order of magnitude for
+    # fonts whose rate is very uneven across strata -- times needs 192,185
+    # renderings for 20 events in SMALL but 12,126 in MEDIUM -- so both
+    # readings are computed and reported rather than one being assumed.
+    per_font_quota = {"calibration": 30, "preflight": 20}
+    font_budgets = {}
+    for split, required in per_font_quota.items():
+        entry = {}
+        for font in split_fonts[split]:
+            pooled_attempted = sum(cells[(font, s)][0] for s in MACRO_STRATA)
+            pooled_events = sum(cells[(font, s)][2] for s in MACRO_STRATA)
+            pooled_lower = wilson_lower(pooled_events, pooled_attempted)
+            pooled_n = renderings_for_quota(pooled_lower, required)
+
+            per_stratum = {}
+            for stratum in MACRO_STRATA:
+                attempted, _, events = cells[(font, stratum)]
+                lower = wilson_lower(events, attempted)
+                per_stratum[stratum] = {
+                    "renderings": attempted, "events": events,
+                    "rate_lower95": lower,
+                    "renderings_for_quota": renderings_for_quota(lower, required),
+                }
+            worst = [v["renderings_for_quota"] for v in per_stratum.values()]
+            entry[font] = {
+                "required_events": required,
+                "pooled_across_strata": {
+                    "renderings": pooled_attempted, "events": pooled_events,
+                    "rate_lower95": pooled_lower,
+                    "renderings_for_quota": pooled_n,
+                },
+                "per_stratum": per_stratum,
+                "strictest_stratum_budget": (None if any(v is None for v in worst)
+                                             else max(worst)),
+            }
+        font_budgets[split] = entry
+
+    interpretations = {
+        "font_quota_pooled_across_strata": {
+            "reading": "each font reaches its quota counting all strata together",
+            "total_by_split": {
+                split: (None if any(v["pooled_across_strata"]["renderings_for_quota"]
+                                    is None for v in entry.values())
+                        else max(v["pooled_across_strata"]["renderings_for_quota"]
+                                 for v in entry.values()) * len(entry))
+                for split, entry in font_budgets.items()},
+        },
+        "font_quota_within_every_stratum": {
+            "reading": "each font reaches its quota separately in every stratum",
+            "total_by_split": {
+                split: (None if any(v["strictest_stratum_budget"] is None
+                                    for v in entry.values())
+                        else max(v["strictest_stratum_budget"]
+                                 for v in entry.values()) * len(entry) * 3)
+                for split, entry in font_budgets.items()},
+        },
+    }
+
     # Throughput and size measured from the pilot itself rather than guessed.
     checkpoint = args.pilot / "checkpoint.jsonl"
     bytes_per_row = checkpoint.stat().st_size / max(1, len(rows))
@@ -214,6 +273,8 @@ def main() -> int:
         "pilot_recipe_sha256": recipe.get("recipe_sha256"),
         "per_font_stratum": cell_report,
         "budgets": budgets,
+        "per_font_quota_budgets": font_budgets,
+        "quota_interpretations": interpretations,
         "BUDGET_STATUS": ("IDENTIFIED" if identifiable else "BUDGET_UNIDENTIFIABLE"),
         "unidentifiable_cells": unidentifiable,
         "total_renderings": grand_total,
