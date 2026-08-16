@@ -225,6 +225,29 @@ def main() -> int:
             rows, lambda r: f"{r['nominal_size']}|{r['upscale_bucket']}"),
     }
 
+    # Nominal size and measured ink height are correlated but not the same
+    # thing: padding, upscale, the detector's crop and the recognizer's
+    # fixed-height resize all sit between them. Holding one fixed and varying
+    # the other shows which of the two the effect actually follows, so a result
+    # explained by geometry is not additionally reported as a size effect.
+    within_size = {}
+    for size in sorted({r["nominal_size"] for r in rows}):
+        subset = [r for r in rows if r["nominal_size"] == size]
+        within_size[str(size)] = group_by(
+            subset, lambda r: bin_value(r["runtime_ink_height"], INK_HEIGHT_BINS)
+            if r["runtime_ink_height"] is not None else None)
+    within_ink_bin = {}
+    for name in {bin_value(r["runtime_ink_height"], INK_HEIGHT_BINS)
+                 for r in rows if r["runtime_ink_height"] is not None}:
+        subset = [r for r in rows
+                  if r["runtime_ink_height"] is not None
+                  and bin_value(r["runtime_ink_height"], INK_HEIGHT_BINS) == name]
+        within_ink_bin[name] = group_by(subset, lambda r: r["nominal_size"])
+    disentangle = {
+        "ink_height_within_fixed_nominal_size": within_size,
+        "nominal_size_within_fixed_ink_bin": within_ink_bin,
+    }
+
     hallucinations = [r for r in rows if r["clean_hallucination"]]
     fonts_hit = {r["font"] for r in hallucinations}
     templates_hit = {r["template_index"] for r in hallucinations}
@@ -337,6 +360,7 @@ def main() -> int:
         "funnel_losses": losses,
         "breakdowns": breakdowns,
         "interactions": interactions,
+        "nominal_size_vs_measured_geometry": disentangle,
         "verdict_inputs": {
             "total_clean_hallucination": len(hallucinations),
             "fonts_with_hallucination": sorted(fonts_hit),
