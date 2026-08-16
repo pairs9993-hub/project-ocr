@@ -335,6 +335,19 @@ def main() -> int:
     optical_separated = any(any_separated(breakdowns[key]) for key in
                             ("by_padding_bucket", "by_upscale_bucket",
                              "by_polarity"))
+    # Font was shown not to gate whether hallucination happens at all -- every
+    # font produces it under matched conditions. Whether fonts differ in *rate*
+    # is a separate question that was left open, so it is tested rather than
+    # assumed, and a geometry effect is only attributed to geometry if it
+    # survives dropping the font with the highest rate.
+    font_separated = any_separated(breakdowns["by_font"])
+    worst_font = max(breakdowns["by_font"],
+                     key=lambda k: breakdowns["by_font"][k]["hallucination_rate"] or 0.0)
+    without_worst = [r for r in rows if r["font"] != worst_font]
+    geometry_without_worst_font = any_separated(
+        group_by(without_worst,
+                 lambda r: bin_value(r["runtime_ink_height"], INK_HEIGHT_BINS)
+                 if r["runtime_ink_height"] is not None else None))
     funnel_usable = split["funnel_usable"]
 
     if not hallucinations:
@@ -343,12 +356,16 @@ def main() -> int:
         verdict = "NOT_CONFIRMED"
     elif not (reproduced_across_fonts and not_concentrated and geometry_support):
         verdict = "NOT_CONFIRMED"
-    elif geometry_separated and not optical_separated:
-        verdict = "PIXEL_GEOMETRY_DEPENDENT"
-    elif optical_separated and not geometry_separated:
-        verdict = "OPTICAL_CONDITION_DEPENDENT"
-    elif geometry_separated and optical_separated:
+    elif geometry_separated and not geometry_without_worst_font:
+        # The whole geometry effect rests on one typeface, so it is a font
+        # rate effect wearing geometry's clothes.
+        verdict = "NOT_CONFIRMED"
+    elif geometry_separated and (optical_separated or font_separated):
         verdict = "INTERACTION_DEPENDENT"
+    elif geometry_separated:
+        verdict = "PIXEL_GEOMETRY_DEPENDENT"
+    elif optical_separated:
+        verdict = "OPTICAL_CONDITION_DEPENDENT"
     else:
         verdict = "NOT_CONFIRMED"
 
@@ -377,6 +394,10 @@ def main() -> int:
             "geometry_support": geometry_support,
             "geometry_bins_statistically_separated": geometry_separated,
             "optical_cells_statistically_separated": optical_separated,
+            "font_rates_statistically_separated": font_separated,
+            "highest_rate_font": worst_font,
+            "geometry_survives_dropping_highest_rate_font":
+                geometry_without_worst_font,
             "clean_eligible_attrition": round(attrition, 6),
             "pipeline_attrition": round(pipeline_attrition, 6),
             "recognizer_attrition": round(recognizer_attrition, 6),
