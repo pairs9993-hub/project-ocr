@@ -51,6 +51,38 @@ def zero_upper_bound(trials: int, confidence: float = 0.95) -> float:
     return 1.0 - (1.0 - confidence) ** (1.0 / trials) if trials else 1.0
 
 
+PIPELINE_LOSS_KEYS = ("detector_miss", "wrong_line_selected",
+                      "recognizer_failure", "alignment_ambiguity",
+                      "render_or_detector_error")
+PIPELINE_ATTRITION_LIMIT = 0.20
+
+
+def funnel_attrition(funnel: dict, losses: dict) -> dict:
+    """Split attrition into the part that can bias the result and the part that cannot.
+
+    Samples the *pipeline* drops -- a detector miss, a box the target does not
+    fall in, a CTC collapse that disagrees with itself -- never reach the
+    recognizer, and they disappear at rates that depend on the axes under test,
+    so they can select the surviving sample by the very variable being
+    measured. Samples the *recognizer* reads wrongly did reach it; excluding
+    them from a clean comparison is required, not a bias.
+
+    Only the first kind may gate a verdict. An earlier version summed both and
+    would have failed this diagnostic for correctly observing that the
+    recognizer drops characters.
+    """
+    eligible = funnel["N_RENDERED_ELIGIBLE"] or 1
+    pipeline_lost = sum(losses.get(key, 0) for key in PIPELINE_LOSS_KEYS)
+    pipeline = pipeline_lost / eligible
+    total = 1.0 - funnel["N_CLEAN_ELIGIBLE"] / eligible
+    return {
+        "pipeline_attrition": pipeline,
+        "recognizer_attrition": total - pipeline,
+        "total_attrition": total,
+        "funnel_usable": pipeline <= PIPELINE_ATTRITION_LIMIT,
+    }
+
+
 def summarise(rows: list[dict]) -> dict:
     """Counts and rates for one group of eligible occurrences."""
     eligible = len(rows)
@@ -261,13 +293,26 @@ def main() -> int:
     # us. When attrition is heavy and runs in opposite directions across the
     # axis under test, the surviving sample is selected by that axis, and any
     # apparent effect may be differential attrition rather than hallucination.
-    attrition = 1.0 - (funnel["N_CLEAN_ELIGIBLE"] / funnel["N_RENDERED_ELIGIBLE"]
-                       if funnel["N_RENDERED_ELIGIBLE"] else 1.0)
+    # Two very different things were being added together here. Samples the
+    # *pipeline* discards -- a detector miss, a box the target does not fall
+    # in, a CTC collapse that disagrees with itself -- never reach the
+    # recognizer, and they vanish at rates that depend on the axes under test.
+    # Samples the *recognizer* reads wrongly (a dropped character, a second
+    # substitution) did reach it and are its genuine behaviour; excluding them
+    # from a clean comparison is required, not a bias.
+    #
+    # Only the first kind can select the sample by the variable being measured,
+    # so only the first kind gates the verdict. Counting recognizer error as
+    # pipeline attrition would have failed this diagnostic for doing its job.
+    split = funnel_attrition(funnel, losses)
+    pipeline_attrition = split["pipeline_attrition"]
+    recognizer_attrition = split["recognizer_attrition"]
+    attrition = split["total_attrition"]
     geometry_separated = any_separated(breakdowns["by_runtime_ink_height_bin"])
     optical_separated = any(any_separated(breakdowns[key]) for key in
                             ("by_padding_bucket", "by_upscale_bucket",
                              "by_polarity"))
-    funnel_usable = attrition <= 0.60
+    funnel_usable = split["funnel_usable"]
 
     if not hallucinations:
         verdict = "NOT_CONFIRMED"
@@ -309,8 +354,15 @@ def main() -> int:
             "geometry_bins_statistically_separated": geometry_separated,
             "optical_cells_statistically_separated": optical_separated,
             "clean_eligible_attrition": round(attrition, 6),
+            "pipeline_attrition": round(pipeline_attrition, 6),
+            "recognizer_attrition": round(recognizer_attrition, 6),
             "funnel_usable": funnel_usable,
-            "funnel_usable_threshold": 0.60,
+            "funnel_usable_threshold": PIPELINE_ATTRITION_LIMIT,
+            "funnel_gate_basis": (
+                "pipeline attrition only -- detector miss, wrong line, "
+                "recognizer failure and alignment ambiguity. Characters the "
+                "recognizer genuinely misread are its behaviour, not sample "
+                "selection, and do not gate the verdict."),
         },
         "HALLUCINATION_DOMAIN": verdict,
         "nominal_size_caveat": (
