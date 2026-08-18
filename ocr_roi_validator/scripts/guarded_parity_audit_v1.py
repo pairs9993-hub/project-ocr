@@ -32,6 +32,9 @@ if str(VALIDATOR_ROOT) not in sys.path:
     sys.path.insert(0, str(VALIDATOR_ROOT))
 
 from ocr_roi_validator.line_verifier_model import LineVerifier
+from ocr_roi_validator.runtime_action import (
+    APPLY_E_CORRECTION, KEEP_BASELINE, action_of,
+)
 from ocr_roi_validator.runtime_guard import (
     ACCENT_PRESENT, BARE_E, RUNTIME_EPSILON, UNKNOWN, assert_monotonic,
     guarded_verdict, in_uncertainty_band, ungated_verdict,
@@ -210,6 +213,31 @@ def main() -> int:
                  & (guarded["torch"][mask] == UNKNOWN)).sum()),
         }
 
+    # Action parity: what the product would actually do. Three of the four
+    # verdicts leave the baseline alone, so a verdict disagreement between
+    # ACCENT_PRESENT and UNKNOWN produces identical output.
+    actions = {name: action_of(guarded[name]) for name in guarded}
+    for first, second in pairs:
+        key = "%s_vs_%s" % (first, second)
+        differing = actions[first] != actions[second]
+        # The only direction that could harm a user: one runtime corrects
+        # where another would have left the text alone.
+        unsafe = ((actions[first] == APPLY_E_CORRECTION)
+                  != (actions[second] == APPLY_E_CORRECTION))
+        comparisons[key]["action_mismatches"] = int(differing.sum())
+        comparisons[key]["unsafe_action_mismatches"] = int(unsafe.sum())
+        comparisons[key]["specialist_applied_mismatches"] = int(
+            ((actions[first] == APPLY_E_CORRECTION)
+             != (actions[second] == APPLY_E_CORRECTION)).sum())
+
+    action_mismatches = sum(c["action_mismatches"] for c in comparisons.values())
+    unsafe_mismatches = sum(c["unsafe_action_mismatches"]
+                            for c in comparisons.values())
+    report_actions = {
+        name: {"apply_e_correction": int((a == APPLY_E_CORRECTION).sum()),
+               "keep_baseline": int((a == KEEP_BASELINE).sum())}
+        for name, a in actions.items()}
+
     guarded_mismatches = sum(c["guarded_verdict_mismatches"]
                              for c in comparisons.values())
     raw_mismatches = sum(c["raw_verdict_mismatches"] for c in comparisons.values())
@@ -246,6 +274,21 @@ def main() -> int:
         "RAW_ONNX_VERDICT_PARITY_STATUS": "FAIL" if raw_mismatches else "PASS",
         "raw_verdict_mismatches_total": raw_mismatches,
         "RUNTIME_GUARD_STATUS": "PASS" if safety_ok else "FAIL",
+        "action_counts": report_actions,
+        "action_mismatches_total": action_mismatches,
+        "unsafe_action_mismatches_total": unsafe_mismatches,
+        "INTERNAL_VERDICT_PARITY_STATUS": (
+            "PASS" if guarded_mismatches == 0 else "FAIL"),
+        "CORRECTION_ACTION_PARITY_STATUS": (
+            "PASS" if action_mismatches == 0 else "FAIL"),
+        "UNSAFE_ACTION_MISMATCH": unsafe_mismatches,
+        "PRODUCT_RUNTIME_PARITY_STATUS": (
+            "PASS" if comparisons["training_vs_product"]["action_mismatches"] == 0
+            else "FAIL"),
+        "action_equivalence": (
+            "ACCENT_PRESENT, UNKNOWN and PREMODEL_UNKNOWN all map to "
+            "KEEP_BASELINE; only BARE_E acts. An internal verdict mismatch "
+            "between two KEEP_BASELINE outcomes produces identical output."),
         "GUARDED_ONNX_VERDICT_PARITY_STATUS": (
             "PASS" if guarded_mismatches == 0 else "FAIL"),
         "guarded_verdict_mismatches_total": guarded_mismatches,
@@ -277,7 +320,8 @@ def main() -> int:
     print("GUARDED_ONNX_VERDICT_PARITY_STATUS %s (%d mismatches)"
           % (report["GUARDED_ONNX_VERDICT_PARITY_STATUS"], guarded_mismatches))
     print("report sha256 %s" % hashlib.sha256(payload.encode()).hexdigest())
-    return 0 if guarded_mismatches == 0 and safety_ok else 1
+    # The gate for proceeding is action parity, not internal verdict parity.
+    return 0 if action_mismatches == 0 and unsafe_mismatches == 0 and safety_ok else 1
 
 
 if __name__ == "__main__":
