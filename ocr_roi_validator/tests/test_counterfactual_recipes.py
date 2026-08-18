@@ -178,3 +178,47 @@ class PairIsolationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PremodelControlFlowTests(unittest.TestCase):
+    """ORDINAL_OUT_OF_RANGE is control flow, not a class the model learns."""
+
+    def test_it_is_declared_as_control_flow(self) -> None:
+        from ocr_roi_validator.counterfactual_recipes import (
+            PREMODEL_CONTROL_FLOW_KINDS,
+        )
+        self.assertIn("ORDINAL_OUT_OF_RANGE", PREMODEL_CONTROL_FLOW_KINDS)
+        self.assertEqual(PREMODEL_CONTROL_FLOW_KINDS["ORDINAL_OUT_OF_RANGE"],
+                         "PREMODEL_REJECT_ORDINAL_OUT_OF_RANGE")
+
+    def test_trainable_kinds_exclude_it(self) -> None:
+        from ocr_roi_validator.counterfactual_recipes import (
+            TRAINABLE_UNKNOWN_KINDS,
+        )
+        self.assertNotIn("ORDINAL_OUT_OF_RANGE", TRAINABLE_UNKNOWN_KINDS)
+        self.assertIn("ORDINAL_SHIFTED", TRAINABLE_UNKNOWN_KINDS)
+        self.assertIn("TOKEN_COUNT_MISMATCH", TRAINABLE_UNKNOWN_KINDS)
+
+    def test_trainable_and_control_flow_partition_the_kinds(self) -> None:
+        from ocr_roi_validator.counterfactual_recipes import (
+            PREMODEL_CONTROL_FLOW_KINDS, TRAINABLE_UNKNOWN_KINDS,
+        )
+        self.assertEqual(
+            set(TRAINABLE_UNKNOWN_KINDS) | set(PREMODEL_CONTROL_FLOW_KINDS),
+            set(UNKNOWN_KINDS))
+        self.assertEqual(
+            set(TRAINABLE_UNKNOWN_KINDS) & set(PREMODEL_CONTROL_FLOW_KINDS),
+            set())
+
+    def test_generator_and_gate_agree(self) -> None:
+        """Zero disagreement between what the generator emits and what the
+        pre-model gate rejects."""
+        from ocr_roi_validator.counterfactual_recipes import (
+            PREMODEL_CONTROL_FLOW_KINDS,
+        )
+        from ocr_roi_validator.premodel_gate import check_premodel
+        # An out-of-range ordinal must be rejected by the gate.
+        self.assertEqual(check_premodel(9, 7).reason, "ORDINAL_OUT_OF_RANGE")
+        self.assertIn("ORDINAL_OUT_OF_RANGE", PREMODEL_CONTROL_FLOW_KINDS)
+        # The other kinds are in range and must not be pre-empted.
+        self.assertFalse(check_premodel(5, 8).rejected)

@@ -27,6 +27,8 @@ from typing import Mapping
 
 __all__ = [
     "CounterfactualRecipe",
+    "PREMODEL_CONTROL_FLOW_KINDS",
+    "TRAINABLE_UNKNOWN_KINDS",
     "COUNTERFACTUAL_RECIPES",
     "build_word_contexts",
     "assert_context_independence",
@@ -92,16 +94,25 @@ RENDERINGS_PER_CONTEXT = PAIRS_PER_CONTEXT * MEMBERS_PER_PAIR + UNKNOWN_PER_CONT
 
 # How the UNKNOWN cases are produced. Each is a rendering whose query cannot be
 # answered from the target, so the correct verdict is UNKNOWN rather than e/é.
-# All three are constructed from the query, not waited for. An earlier
-# TARGET_NOT_DECODED kind asked for a rendering whose target failed to decode,
-# which normal renderings almost never do -- every one of those cases was
-# discarded in a smoke test. ORDINAL_OUT_OF_RANGE produces the same "the query
-# cannot be answered" situation by construction.
+# Trainable UNKNOWN kinds: the query is well formed, so only the model can tell
+# that it cannot be answered.
 UNKNOWN_KINDS = {
     "ORDINAL_SHIFTED": 4,        # query points away from the drawn target
     "TOKEN_COUNT_MISMATCH": 4,   # declared token count disagrees with the decode
-    "ORDINAL_OUT_OF_RANGE": 4,   # query names a position beyond the decode
+    "ORDINAL_OUT_OF_RANGE": 4,   # see PREMODEL_CONTROL_FLOW_KINDS below
 }
+
+# ORDINAL_OUT_OF_RANGE is generated but is NOT a classifier class. The Stage
+# 3E-0 input contract cannot represent target_ordinal >= decoded_length, and the
+# runtime rejects such a query before inference, so it belongs to control flow
+# rather than to training. Future recipes must count it here, not in the class
+# quota; the existing 15,000 renderings are not regenerated, and the filtered
+# model-input view marks these rows instead.
+PREMODEL_CONTROL_FLOW_KINDS = {
+    "ORDINAL_OUT_OF_RANGE": "PREMODEL_REJECT_ORDINAL_OUT_OF_RANGE",
+}
+TRAINABLE_UNKNOWN_KINDS = {k: v for k, v in UNKNOWN_KINDS.items()
+                           if k not in PREMODEL_CONTROL_FLOW_KINDS}
 assert sum(UNKNOWN_KINDS.values()) == UNKNOWN_PER_CONTEXT
 
 
