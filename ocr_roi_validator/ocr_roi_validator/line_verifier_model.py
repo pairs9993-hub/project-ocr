@@ -46,7 +46,6 @@ class LineVerifier(nn.Module):
             nn.MaxPool2d((2, 1)),
             nn.Conv2d(hidden, hidden, 3, padding=1), nn.BatchNorm2d(hidden),
             nn.ReLU(),
-            nn.AdaptiveAvgPool2d((1, None)),
         )
         # The query is two numbers -- an ordinal and a count -- never a
         # character. It is projected and added to every column so the encoder
@@ -61,7 +60,12 @@ class LineVerifier(nn.Module):
         )
 
     def forward(self, planes: torch.Tensor, query: torch.Tensor):
-        features = self.encoder(planes).squeeze(2)          # (B, hidden, W)
+        # Collapse the remaining height by averaging. This was an
+        # AdaptiveAvgPool2d((1, None)), which opset 11 cannot export because the
+        # None makes output_size non-constant. Three vertical poolings leave a
+        # fixed height of 4, so a plain mean is the same computation -- verified
+        # identical on the trained weights, not merely assumed.
+        features = self.encoder(planes).mean(dim=2)          # (B, hidden, W)
         conditioned = features + self.query_encoder(query).unsqueeze(-1)
         scores = self.attention(conditioned).squeeze(1)      # (B, W)
         weights = F.softmax(scores, dim=-1)
