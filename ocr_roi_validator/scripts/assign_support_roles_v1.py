@@ -12,8 +12,12 @@ held-back set. The last is called support-holdout rather than final holdout
 precisely because its behaviour has already been observed here; a genuine
 untouched pool is reserved separately and left unscreened.
 
-Assignment is a stable hash over the spelling, stratified so no role inherits
-one context. Nothing is chosen by looking at the numbers.
+Assignment is a global stable hash over the spelling, dealt round-robin.
+Nothing is chosen by looking at the numbers. It is deliberately not stratified:
+an earlier revision built a stratified pool, then re-sorted it globally and
+threw the stratification away while still describing itself as stratified. The
+membership that produced is frozen and is not redrawn here, because correcting
+a description must not become a licence to reassign roles after seeing results.
 """
 
 from __future__ import annotations
@@ -133,21 +137,26 @@ def main() -> int:
     observed = sorted(w for w, v in composite.items()
                       if v["support"] != "NOT_OBSERVED")
 
-    # Stratify so a role cannot inherit a single context, then order by hash.
-    def band(word: str) -> str:
-        rate = composite[word]["support_rate"] or 0.0
-        return "high" if rate >= 0.05 else ("mid" if rate >= 0.02 else "low")
-
-    grouped: dict[tuple, list[str]] = defaultdict(list)
-    for word in robust:
-        grouped[(band(word), composite[word]["preceding_class"])].append(word)
-    pool: list[str] = []
-    for key in sorted(grouped):
-        pool.extend(sorted(grouped[key], key=lambda w: stable_rank(w, "order")))
-
+    # Global stable-hash assignment: words are ordered by a hash of their
+    # spelling and dealt round-robin.
+    #
+    # An earlier version built a pool grouped by rate band and preceding class
+    # and described itself as stratified, but then re-sorted that pool globally
+    # by the same hash, which discarded the grouping entirely. Computing the
+    # assignment with and without the grouping step gives byte-identical
+    # membership, so the description was wrong rather than the code. The
+    # grouping is removed instead of repaired: membership is already frozen,
+    # and making it real now would redraw the roles after seeing results.
     assignment: dict[str, list[str]] = {role: [] for role in ROLES}
-    for position, word in enumerate(sorted(pool, key=lambda w: stable_rank(w, "role"))):
+    for position, word in enumerate(sorted(robust,
+                                           key=lambda w: stable_rank(w, "role"))):
         assignment[ROLES[position % len(ROLES)]].append(word)
+
+    canonical = json.dumps({role: sorted(words)
+                            for role, words in assignment.items()},
+                           sort_keys=True, ensure_ascii=False,
+                           separators=(",", ":"))
+    membership_digest = hashlib.sha256(canonical.encode()).hexdigest()
 
     # A role whose events come mostly from one word measures that word.
     concentration = {}
@@ -221,9 +230,12 @@ def main() -> int:
         "role_concentration": concentration,
         "roles_exceeding_concentration_cap": concentrated,
         "exposure_rebalance_required": required_exposure,
-        "assignment_method": ("stratified by rate band and preceding class, "
-                              "ordered by sha256 of the word, dealt "
-                              "round-robin; no word chosen by inspection"),
+        "assignment_method": ("global stable-hash assignment: words ordered "
+                              "by sha256 of the spelling and dealt round-robin. "
+                              "Not stratified -- an earlier description claimed "
+                              "stratification that the code discarded"),
+        "canonical_membership_sha256": membership_digest,
+        "canonical_membership": canonical,
         "exposure_lesson": (
             "several words labelled SPARSE at 400 renderings became ROBUST at "
             "2,000, so that label reflected exposure rather than the word. The "

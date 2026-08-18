@@ -82,6 +82,29 @@ def build_word_contexts(count: int, salt: str,
     return tuple(contexts)
 
 
+# Exact composition of one context's renderings. Stated as counts rather than
+# as a fraction, because "24 pairs plus 25% UNKNOWN" left the arithmetic
+# ambiguous: 60 per context is 24 pairs (48 members) plus 12 UNKNOWN cases.
+PAIRS_PER_CONTEXT = 24
+MEMBERS_PER_PAIR = 2
+UNKNOWN_PER_CONTEXT = 12
+RENDERINGS_PER_CONTEXT = PAIRS_PER_CONTEXT * MEMBERS_PER_PAIR + UNKNOWN_PER_CONTEXT
+
+# How the UNKNOWN cases are produced. Each is a rendering whose query cannot be
+# answered from the target, so the correct verdict is UNKNOWN rather than e/é.
+# All three are constructed from the query, not waited for. An earlier
+# TARGET_NOT_DECODED kind asked for a rendering whose target failed to decode,
+# which normal renderings almost never do -- every one of those cases was
+# discarded in a smoke test. ORDINAL_OUT_OF_RANGE produces the same "the query
+# cannot be answered" situation by construction.
+UNKNOWN_KINDS = {
+    "ORDINAL_SHIFTED": 4,        # query points away from the drawn target
+    "TOKEN_COUNT_MISMATCH": 4,   # declared token count disagrees with the decode
+    "ORDINAL_OUT_OF_RANGE": 4,   # query names a position beyond the decode
+}
+assert sum(UNKNOWN_KINDS.values()) == UNKNOWN_PER_CONTEXT
+
+
 @dataclass(frozen=True)
 class CounterfactualRecipe:
     """One counterfactual split."""
@@ -90,35 +113,54 @@ class CounterfactualRecipe:
     role: str
     salt: str
     word_context_count: int
-    pairs_per_context: int
     seed: int
+    pairs_per_context: int = PAIRS_PER_CONTEXT
+    unknown_per_context: int = UNKNOWN_PER_CONTEXT
     fonts: tuple[str, ...] = COUNTERFACTUAL_FONTS
-    unknown_fraction: float = 0.25
     words: tuple[tuple[str, str], ...] = field(default=(), compare=False)
 
     @property
+    def renderings_per_context(self) -> int:
+        return self.pairs_per_context * MEMBERS_PER_PAIR + self.unknown_per_context
+
+    @property
+    def pair_members(self) -> int:
+        return self.word_context_count * self.pairs_per_context * MEMBERS_PER_PAIR
+
+    @property
+    def unknown_cases(self) -> int:
+        return self.word_context_count * self.unknown_per_context
+
+    @property
     def renderings(self) -> int:
-        # Two members per pair, plus the UNKNOWN corruptions drawn alongside.
-        base = self.word_context_count * self.pairs_per_context * 2
-        return int(round(base * (1.0 + self.unknown_fraction)))
+        return self.pair_members + self.unknown_cases
 
     def as_dict(self) -> dict:
         return {
             "name": self.name, "role": self.role, "salt": self.salt,
             "word_context_count": self.word_context_count,
             "pairs_per_context": self.pairs_per_context,
+            "members_per_pair": MEMBERS_PER_PAIR,
+            "unknown_per_context": self.unknown_per_context,
+            "unknown_kinds": dict(UNKNOWN_KINDS),
+            "renderings_per_context": self.renderings_per_context,
+            "composition": (
+                f"{self.pairs_per_context} pairs x {MEMBERS_PER_PAIR} members "
+                f"= {self.pairs_per_context * MEMBERS_PER_PAIR} member images, "
+                f"plus {self.unknown_per_context} UNKNOWN cases "
+                f"= {self.renderings_per_context} renderings per context"),
+            "pair_members": self.pair_members,
+            "unknown_cases": self.unknown_cases,
             "seed": self.seed, "fonts": list(self.fonts),
-            "unknown_fraction": self.unknown_fraction,
             "renderings": self.renderings,
             "words": [list(pair) for pair in self.words],
         }
 
 
-def _make(name: str, role: str, salt: str, count: int, pairs: int, seed: int,
+def _make(name: str, role: str, salt: str, count: int, seed: int,
           exclude: frozenset[str]) -> CounterfactualRecipe:
     return CounterfactualRecipe(
-        name=name, role=role, salt=salt, word_context_count=count,
-        pairs_per_context=pairs, seed=seed,
+        name=name, role=role, salt=salt, word_context_count=count, seed=seed,
         words=build_word_contexts(count, salt, exclude))
 
 
@@ -140,10 +182,10 @@ _EXCLUDE = _prior_words()
 COUNTERFACTUAL_RECIPES: Mapping[str, CounterfactualRecipe] = {
     "line_counterfactual_train_v1": _make(
         "line_counterfactual_train_v1", "primary_training_data",
-        "counterfactual-train-v1", 200, 24, 50100000, _EXCLUDE),
+        "counterfactual-train-v1", 200, 50100000, _EXCLUDE),
     "line_counterfactual_calibration_v1": _make(
         "line_counterfactual_calibration_v1", "threshold_calibration_only",
-        "counterfactual-calibration-v1", 50, 24, 50200000, _EXCLUDE),
+        "counterfactual-calibration-v1", 50, 50200000, _EXCLUDE),
 }
 
 
