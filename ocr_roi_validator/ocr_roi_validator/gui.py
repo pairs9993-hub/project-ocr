@@ -23,6 +23,7 @@ from .compare import (
     normalize_ui_text,
 )
 from .ocr_engine import OCREngine
+from .preset_workflow import ROIPresetWorkflow
 from .roi_preprocess import RoiPreprocessConfig, crop_roi, pad_long_roi
 from .scroll_merge import AdaptiveFrameSampler, ScrollTextAccumulator, VerticalListAccumulator
 
@@ -214,7 +215,7 @@ class ScreenAreaSelector(tk.Toplevel):
         self.destroy()
 
 
-class OCRValidatorGUI:
+class OCRValidatorGUI(ROIPresetWorkflow):
     def __init__(self, root: tk.Tk, engine: OCREngine):
         self.root = root
         self.engine = engine
@@ -269,6 +270,7 @@ class OCRValidatorGUI:
 
         self.status_var = tk.StringVar(value="Ready")
 
+        self._init_presets()
         self._build_layout()
 
     def _build_layout(self):
@@ -367,6 +369,8 @@ class OCRValidatorGUI:
         ttk.Label(row_b, text="Live FPS").pack(side=tk.LEFT, padx=(6, 4))
         ttk.Entry(row_b, textvariable=self.live_fps_var, width=4).pack(side=tk.LEFT)
 
+        self._build_preset_toolbar(self.root)
+
         body = ttk.Panedwindow(self.root, orient=tk.HORIZONTAL)
         body.pack(fill=tk.BOTH, expand=True)
 
@@ -416,6 +420,8 @@ class OCRValidatorGUI:
         status.pack(fill=tk.X)
 
     def load_image(self):
+        if not self._roi_changes_allowed():
+            return
         path = filedialog.askopenfilename(
             title="Select image",
             filetypes=[("Image Files", "*.png *.jpg *.jpeg")],
@@ -430,6 +436,8 @@ class OCRValidatorGUI:
         self.status_var.set(f"Loaded image: {Path(path).name}")
 
     def capture_screen_area(self):
+        if not self._roi_changes_allowed():
+            return
         selector = ScreenAreaSelector(self.root)
         selector.grab_set()
         self.root.wait_window(selector)
@@ -500,6 +508,8 @@ class OCRValidatorGUI:
         return sx, sy
 
     def _on_canvas_press(self, event):
+        if not self._roi_changes_allowed():
+            return
         if self.source_image is None:
             return
         self.drawing = True
@@ -563,6 +573,8 @@ class OCRValidatorGUI:
         self.expected_text.insert("1.0", self.rois[roi_id].expected)
 
     def apply_expected(self):
+        if not self._roi_changes_allowed():
+            return
         if self.selected_roi_id is None:
             messagebox.showinfo("Info", "Select an ROI first.")
             return
@@ -570,6 +582,9 @@ class OCRValidatorGUI:
         self.status_var.set(f"Updated expected text for ROI {self.selected_roi_id}")
 
     def clear_rois(self):
+        if not self._roi_changes_allowed():
+            return
+        self._preset_direction = None
         self.rois.clear()
         self.next_roi_id = 1
         self.selected_roi_id = None
@@ -885,7 +900,9 @@ class OCRValidatorGUI:
         expected_rows = [row for row in roi.expected.splitlines() if row.strip()]
         if not expected_rows:
             return ScrollTextAccumulator(min_length=3, min_score=0.25)
-        if len(expected_rows) > 1 or self.vertical_list_mode_var.get():
+        if self.vertical_list_mode_var.get() or (
+            len(expected_rows) > 1 and getattr(self, "_preset_direction", None) != "horizontal"
+        ):
             return VerticalListAccumulator(
                 expected_rows,
                 require_loop=self._scrolling_enabled(),
@@ -904,6 +921,7 @@ class OCRValidatorGUI:
             self.vertical_list_mode_var.set(False)
 
     def _on_vertical_list_mode_changed(self) -> None:
+        self._preset_direction = "vertical" if self.vertical_list_mode_var.get() else "horizontal"
         if self.vertical_list_mode_var.get():
             self.scroll_mode_var.set(True)
 
@@ -940,6 +958,9 @@ class OCRValidatorGUI:
         self.status_var.set("OCR stopped")
 
     def start_live_monitor(self):
+        if self._timed_capture_running:
+            messagebox.showwarning("ROI", "Wait for timed capture to finish.")
+            return
         if self.screen_base_rect is None:
             messagebox.showwarning("Warning", "Timed/live monitoring requires screen capture mode.")
             return
@@ -1057,6 +1078,8 @@ class OCRValidatorGUI:
         self._append_live_log("Live monitor stopped")
 
     def run_once(self):
+        if not self._roi_changes_allowed():
+            return
         if self.source_image is None:
             messagebox.showwarning("Warning", "Load an image or capture a screen area first.")
             return
@@ -1065,6 +1088,9 @@ class OCRValidatorGUI:
             return
 
         try:
+            if self.screen_base_rect is not None:
+                with mss.mss() as sct:
+                    self.source_image = grab_screen_rect_with(sct, self.screen_base_rect)
             self._evaluate_rois(self.source_image)
             self.status_var.set("Run once completed")
         except Exception as exc:
@@ -1072,6 +1098,8 @@ class OCRValidatorGUI:
             messagebox.showerror("OCR Error", str(exc))
 
     def run_timed_capture(self):
+        if not self._roi_changes_allowed():
+            return
         if not self.rois:
             messagebox.showwarning("Warning", "Add at least one ROI.")
             return
@@ -1081,7 +1109,7 @@ class OCRValidatorGUI:
 
         try:
             duration = float(self.duration_var.get())
-            fps = float(self.scroll_fps_var.get() if self.scroll_mode_var.get() else self.fps_var.get())
+            fps = float(self.scroll_fps_var.get() if self._scrolling_enabled() else self.fps_var.get())
         except ValueError:
             messagebox.showerror("Error", "Duration/FPS must be numeric.")
             return
@@ -1095,11 +1123,12 @@ class OCRValidatorGUI:
             run_name = datetime.now().strftime("run_%Y%m%d_%H%M%S")
             save_dir = Path("captures") / run_name
 
+        self._timed_capture_running = True
         self.status_var.set("Timed capture running...")
 
         def worker():
             try:
-                if self.scroll_mode_var.get():
+                if self._scrolling_enabled():
                     self._run_scroll_capture(duration=duration, fps=fps, save_dir=save_dir)
                     return
 
@@ -1116,6 +1145,7 @@ class OCRValidatorGUI:
             except Exception as exc:
                 self.root.after(0, messagebox.showerror, "Timed Capture Error", str(exc))
             finally:
+                self.root.after(0, setattr, self, "_timed_capture_running", False)
                 self.root.after(0, self.status_var.set, "Timed capture completed")
 
         threading.Thread(target=worker, daemon=True).start()

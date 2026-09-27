@@ -6,3 +6,5 @@ venv/
 artifacts/
 captures/
 *.log
+/roi_presets.json
+/roi_presets.json.tmp

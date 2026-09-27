@@ -36,6 +36,17 @@ if "%INSTALL_DEPS%"=="1" (
   pip install -r requirements.txt
 )
 
+REM Existing environments also need the Excel preset reader.
+python -c "import openpyxl" >nul 2>&1
+if errorlevel 1 (
+  python -m pip install "openpyxl>=3.1.0"
+  if errorlevel 1 (
+    echo [ERROR] Could not install Excel support.
+    pause
+    exit /b 1
+  )
+)
+
 set RAPID_PACKAGE=artifacts\my_rapid_package
 
 if not exist "%RAPID_PACKAGE%\manifest.json" (

@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "presets": {
+    "roi_courseop": {
+      "image_size": [800, 600],
+      "direction": "vertical",
+      "scrolling": true,
+      "rois": [
+        {"id": 1, "rect": [20, 20, 380, 100], "expected": "Course options"},
+        {"id": 2, "rect": [20, 120, 380, 300], "expected": "Option 1\nOption 2\nOption 3"},
+        {"id": 3, "rect": [20, 320, 380, 400], "expected": "Start"}
+      ]
+    }
+  }
+}

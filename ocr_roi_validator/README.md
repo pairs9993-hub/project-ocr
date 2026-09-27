@@ -161,3 +161,52 @@ manifest.json 필수 필드:
 - git commit -m "Initial standalone ROI OCR validator"
 
 필요 시 이 폴더만 압축/배포하여 독립적으로 설치 가능합니다.
+
+## 이름으로 ROI 묶음 저장하고 Excel에서 적용하기
+
+1. `Capture Screen Area` 또는 `Load Image`로 기준 화면을 준비하고 ROI 1, 2, 3을 그립니다.
+2. 각 ROI에 기대 문구를 입력합니다. `Vertical Rows`는 세로 목록 검증,
+   체크 해제는 horizontal입니다. 가로 스크롤은 `Scrolling / Loop`도 체크합니다.
+3. `ROI preset` 입력란에 `roi_courseop`를 입력하고 `Save Preset`을 누릅니다.
+   ROI 좌표, 기대 문구, 기준 이미지 크기, horizontal/vertical 방향과 스크롤 설정이
+   프로젝트의 `roi_presets.json`에 저장됩니다. 앱을 다시 열면 자동으로 불러옵니다.
+   같은 이름을 저장할 때는 덮어쓰기를 확인합니다.
+4. Excel의 첫 행에 열 이름을 작성하고, 사용할 행에 프리셋 이름을 넣습니다.
+
+   | case_id | roi |
+   | --- | --- |
+   | case_001 | roi_courseop |
+   | case_002 | roi_courseop |
+   | case_003 | roi_other_screen |
+
+5. `Load Excel`에서 `.xlsx` 또는 `.xlsm` 파일을 엽니다. 시트와 ROI 이름 열을
+   선택합니다. `roi` 헤더는 기본 선택되며, 다른 이름의 열도 선택할 수 있습니다.
+   첫 행은 헤더로 사용하며 원본 Excel 파일은 변경하지 않습니다.
+6. Excel 목록에서 행을 선택하면 그 이름의 ROI 묶음과 방향이 즉시 적용됩니다.
+   실제 대상 화면을 준비한 뒤 `Apply + Verify Selected Row`를 누릅니다.
+   일반 화면은 최신 캡처로 `Run Once`, 스크롤/세로 목록은 설정한 Duration 동안
+   `Run Timed Capture`를 실행합니다. 스크롤 대상은 사용자가 직접 움직입니다.
+   이미지 파일만 로드한 상태에서는 스크롤 검증을 실행할 수 없습니다.
+   여러 행을 자동 순회하거나 대상 앱의 화면을 자동 전환하지는 않습니다.
+
+### 다른 사람에게 공유하기
+
+`Export JSON`으로 모든 프리셋을 하나의 JSON 파일로 내보냅니다.
+받는 사람은 `Import JSON`으로 기존 프리셋에 추가한 뒤 같은 Excel을 열면 됩니다.
+동일한 이름이 있으면 덮어쓰기를 확인하고, 취소하면 가져오기 전체를 취소합니다.
+JSON에는 캡처 이미지나 PC별 절대 화면 위치를 넣지 않습니다.
+
+좌표는 **캡처 영역 내부의 픽셀 좌표**입니다. 받는 사람은 동일한 크기와 내용 배치의
+영역을 캡처해야 합니다. 화면 위치가 달라도 사용할 수 있지만, 배율이나 해상도가 달라
+기준 크기가 달라지면 적용을 막습니다. 크기가 같아도 UI 배치가 다르면 ROI를 다시 설정해야 합니다.
+알 수 없는 이름·빈 셀은 이전 ROI로 검증하지 않고 오류를 표시합니다.
+검증 중에는 ROI 전환을 막으므로 Live를 중지하거나 Timed Capture가 끝난 뒤 행을 전환합니다.
+
+JSON 구조 예시는 [examples/roi_presets.json](examples/roi_presets.json)에 있습니다.
+프리셋 이름은 대소문자를 구분하며 Excel 셀의 앞뒤 공백은 제거합니다.
+수식 셀은 Excel이 마지막으로 저장한 계산 결과를 사용하므로, 수식으로 이름을 만든다면
+Excel에서 계산 후 저장하세요. 기대 문구는 프리셋에 저장된 값을 사용합니다.
+언어, 비교 방식, FPS, Duration 등의 나머지 검증 옵션은 현재 앱 설정을 사용합니다.
+
+기존 가상환경으로 직접 실행할 때는 `python -m pip install -r requirements.txt`로
+`openpyxl`을 설치하세요. `run.bat`은 Excel 지원 패키지가 없으면 설치합니다.
