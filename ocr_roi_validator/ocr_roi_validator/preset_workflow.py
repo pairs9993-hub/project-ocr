@@ -11,6 +11,8 @@ class ROIPresetWorkflow:
         self.preset_path = Path(__file__).resolve().parents[1] / "roi_presets.json"
         self.preset_library = {"version": 1, "presets": {}}
         self._timed_capture_running = False
+        self._automation_running = False
+        self._automation_dialog = None
         self._preset_direction = None
         if self.preset_path.exists():
             try:
@@ -27,7 +29,7 @@ class ROIPresetWorkflow:
         self.preset_box.pack(side=tk.LEFT)
         for label, command in (("Save Preset", self.save_roi_preset), ("Apply Preset", self.apply_roi_preset),
                                ("Import JSON", self.import_roi_presets), ("Export JSON", self.export_roi_presets),
-                               ("Load Excel", self.load_roi_excel)):
+                               ("Load Excel", self.load_roi_excel), ("자동화 검증", self.open_automation)):
             ttk.Button(bar, text=label, command=command).pack(side=tk.LEFT, padx=4)
         self._refresh_preset_names()
 
@@ -35,6 +37,9 @@ class ROIPresetWorkflow:
         self.preset_box["values"] = sorted(self.preset_library["presets"])
 
     def _roi_changes_allowed(self):
+        if getattr(self, "_automation_running", False):
+            messagebox.showwarning("ROI", "Stop automation before changing ROIs or running manual OCR.")
+            return False
         if self._timed_capture_running or (self.live_thread and self.live_thread.is_alive()):
             messagebox.showwarning("ROI", "Stop Live and wait for timed capture to finish before changing ROIs.")
             return False
@@ -59,6 +64,10 @@ class ROIPresetWorkflow:
             "rois": [{"id": r.roi_id, "rect": list(r.rect), "expected": r.expected}
                      for r in sorted(self.rois.values(), key=lambda r: r.roi_id)],
         }
+        previous = self.preset_library["presets"].get(name, {})
+        if "capture_anchor" in previous and previous.get("image_size") == preset["image_size"]:
+            if messagebox.askyesno("ROI preset", "Keep this preset's registered Vesta screen reference?\nChoose No if this is a different source screen."):
+                preset["capture_anchor"] = previous["capture_anchor"]
         updated = {"version": 1, "presets": {**self.preset_library["presets"], name: preset}}
         try:
             save_library(self.preset_path, updated)

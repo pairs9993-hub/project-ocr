@@ -1,3 +1,12 @@
+# Vesta Excel 자동화 검증
+
+기존 `run.bat` 실행 후 **자동화 검증** 버튼에서 Vesta ZIP과 Excel TC를 첨부할 수 있습니다.
+Excel `ROI` 열의 이름으로 프리셋을 선택하고 기존 Horizontal/Vertical OCR 검증을 수행합니다.
+기존 프리셋은 최초 한 번 **화면 기준 등록**으로 Vesta 창 상대 좌표를 저장해야 합니다.
+Excel 양식: [최신 TC 템플릿](examples/vesta_automation_tc_template_v2.xlsx)
+및 [결과서 예시](examples/vesta_result_report_example.xlsx).
+ROI별 조기 판정/최대 30초 제한/자동 Excel 내보내기와 좌표 이식 방법은 [사용 안내](docs/VESTA_AUTOMATION.md)를 참고하세요.
+
 # ROI OCR Validator (Standalone)
 
 학습된 OCR 엔진(공용 detector + 언어별 recognizer)을 사용해 ROI 영역 OCR 결과를 기대 문자열과 비교하는 독립 실행 프로그램입니다.

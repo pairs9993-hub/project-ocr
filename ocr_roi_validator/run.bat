@@ -1,6 +1,7 @@
 @echo off
 setlocal
 cd /d %~dp0
+set PYTHONUTF8=1
 
 REM --- Verify the app has the exact-OCR-input capture support -----------------
 REM A stale .pyc or an out-of-date checkout silently produces failure
@@ -36,10 +37,10 @@ if "%INSTALL_DEPS%"=="1" (
   pip install -r requirements.txt
 )
 
-REM Existing environments also need the Excel preset reader.
-python -c "import openpyxl" >nul 2>&1
+REM Existing environments also need Excel and scoped Vesta process cleanup.
+python -c "import openpyxl, psutil" >nul 2>&1
 if errorlevel 1 (
-  python -m pip install "openpyxl>=3.1.0"
+  python -m pip install "openpyxl>=3.1.0" "psutil>=5.9.0"
   if errorlevel 1 (
     echo [ERROR] Could not install Excel support.
     pause

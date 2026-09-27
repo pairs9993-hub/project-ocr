@@ -24,6 +24,7 @@ from .compare import (
 )
 from .ocr_engine import OCREngine
 from .preset_workflow import ROIPresetWorkflow
+from .automation_workflow import AutomationWorkflow
 from .roi_preprocess import RoiPreprocessConfig, crop_roi, pad_long_roi
 from .scroll_merge import AdaptiveFrameSampler, ScrollTextAccumulator, VerticalListAccumulator
 
@@ -215,7 +216,7 @@ class ScreenAreaSelector(tk.Toplevel):
         self.destroy()
 
 
-class OCRValidatorGUI(ROIPresetWorkflow):
+class OCRValidatorGUI(AutomationWorkflow, ROIPresetWorkflow):
     def __init__(self, root: tk.Tk, engine: OCREngine):
         self.root = root
         self.engine = engine
@@ -958,6 +959,9 @@ class OCRValidatorGUI(ROIPresetWorkflow):
         self.status_var.set("OCR stopped")
 
     def start_live_monitor(self):
+        if getattr(self, "_automation_running", False):
+            messagebox.showwarning("Automation", "Stop automation before starting Live.")
+            return
         if self._timed_capture_running:
             messagebox.showwarning("ROI", "Wait for timed capture to finish.")
             return

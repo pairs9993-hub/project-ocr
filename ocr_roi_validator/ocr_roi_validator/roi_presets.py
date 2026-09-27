@@ -16,6 +16,9 @@ def validate_library(data: dict) -> dict:
             raise ValueError("Preset names must be nonempty without surrounding spaces.")
         if not isinstance(preset, dict):
             raise ValueError(f"{name}: invalid preset.")
+        if "capture_anchor" in preset:
+            from .window_anchor import validate_anchor
+            validate_anchor(preset["capture_anchor"])
         if preset.get("direction") not in ("horizontal", "vertical"):
             raise ValueError(f"{name}: direction must be horizontal or vertical.")
         if type(preset.get("scrolling")) is not bool:
