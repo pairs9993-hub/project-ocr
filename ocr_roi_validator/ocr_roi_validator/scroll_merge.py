@@ -107,11 +107,23 @@ class ScrollTextAccumulator:
     def __post_init__(self) -> None:
         self.expected_text = normalize_scroll_text(self.expected_text)
         self.evidence = None
+        self.observed_history = []
         if self.track_observed_text and self.expected_text:
             from .horizontal_scroll import HorizontalScrollEvidence
             self.evidence = HorizontalScrollEvidence(self.expected_text, self.compare_mode, self.similarity_threshold)
 
+    @property
+    def display_text(self):
+        if self.evidence is not None:
+            from .horizontal_scroll import observed_display
+            return observed_display(self.evidence, self.observed_history)
+        return self.final_text
+
     def add(self, text: str, score: float, observed_at: float | None = None) -> bool:
+        # Preserve even low-confidence and unaligned observations for display.
+        if not self.observed_history or self.observed_history[-1] != text:
+            self.observed_history.append(text)
+            self.observed_history = self.observed_history[-100:]
         text = normalize_scroll_text(text)
         if self.evidence is not None:
             self.evidence.last_aligned = False

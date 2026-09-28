@@ -125,3 +125,11 @@ class HorizontalScrollEvidence:
                 "aligned_frames": self.aligned_frames, "ambiguous_frames": self.ambiguous_frames,
                 "unmatched_frames": self.unmatched_frames,
                 "assembly_method": "unique_expected_alignment_of_observed_characters"}
+
+
+def observed_display(evidence, observations):
+    """Keep incomplete/mismatched OCR visible without treating it as validated."""
+    if evidence.passed:
+        return evidence.assembled_text
+    unique = list(dict.fromkeys(text for text in observations if text.strip()))
+    return "\n--- frame ---\n".join(unique)

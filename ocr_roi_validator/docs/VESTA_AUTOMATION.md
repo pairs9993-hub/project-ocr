@@ -306,3 +306,16 @@ with different sizes still use their own anchors and otherwise require registrat
 Export JSON and Import JSON carry the common reference. Importing an older library
 without a common reference preserves the current one; replacing a different shared
 reference requires confirmation. Use the updated program on the receiving PC.
+
+
+### Show observed text when horizontal verification is incomplete
+
+The detected-text field now shows actual OCR observations when horizontal
+verification has not passed, including observations rejected for alignment or
+confidence. Distinct frames are separated by `--- frame ---`; they are not claimed
+to form one sentence. Start OCR keeps the most recent 100 observations for this
+display; automation retains observations in its report. Successful reconstruction
+still displays the verified sentence. Excel adds a separate `스크롤 조합 텍스트`
+column for the reconstruction, where ellipses indicate unconfirmed positions.
+Original frame OCR remains in its existing column. This display fix does not
+supply missing accents or superscript letters, or relax verification thresholds.

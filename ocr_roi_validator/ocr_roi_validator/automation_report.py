@@ -41,7 +41,7 @@ def write_excel_report(path: Path, report):
     summary.append(["TC 번호", "시트", "Excel 행", "TC 제목", "정답지 이름", "사용 명령어", "ROI preset", "상태", "사유", "관찰 시간(초)", "합부(PASS/FAIL)"])
     detail = book.create_sheet("ROI Results")
     detail.append(["TC 번호", "시트", "Excel 행", "TC 제목", "정답지 이름", "사용 명령어", "ROI preset",
-                   "ROI ID", "정답 텍스트", "검출 텍스트", "상태", "사유", "점수", "완료 주기", "검증 모드", "합부(PASS/FAIL)", "문자 관측률", "공백 판정", "프레임별 OCR 원문", "이미지 공백 판정", "이미지 공백 상세"])
+                   "ROI ID", "정답 텍스트", "검출 텍스트", "상태", "사유", "점수", "완료 주기", "검증 모드", "합부(PASS/FAIL)", "문자 관측률", "공백 판정", "프레임별 OCR 원문", "이미지 공백 판정", "이미지 공백 상세", "스크롤 조합 텍스트"])
     for tc in report["results"]:
         common = [tc.get("tc_number", str(tc["row"])), tc["sheet"], tc["row"], tc["title"], tc.get("image", ""),
                   "\n".join(tc.get("commands", [])), tc["preset"]]
@@ -54,13 +54,14 @@ def write_excel_report(path: Path, report):
                 evidence.get("character_coverage"), evidence.get("spacing_status", ""),
                 "\n--- frame ---\n".join(evidence.get("raw_observations", [])),
                 evidence.get("image_spacing", {}).get("status", ""),
-                evidence.get("image_spacing", {}).get("reason", evidence.get("image_spacing", {}).get("method", ""))])
+                evidence.get("image_spacing", {}).get("reason", evidence.get("image_spacing", {}).get("method", "")),
+                evidence.get("assembled_text", evidence.get("accumulated_text", ""))])
     info = book.create_sheet("Run Info")
     info.append(["항목", "값"])
     for key in ("state", "started_at", "ended_at", "tc", "zip", "error"):
         append_safe(info, [key, str(report.get(key, ""))])
     info.append(["결과 구분", "PASS=검증 완료; FAIL_TIMEOUT=시간 내 미완료; ERROR=실행 오류; CANCELLED=사용자 중단; NOT_RUN=미실행"])
-    info.append(["검출 텍스트", "가로 스크롤은 정답으로 위치를 찾은 실제 관측 문자입니다. 미확인 구간은 …로 표시. 프레임별 원문은 별도 열과 JSON에 보존."])
+    info.append(["검출 텍스트", "가로 스크롤 검증이 미완료이면 읽은 OCR 원문을 표시합니다. 서로 다른 프레임은 구분선으로 분리합니다. 검증된 조합은 완료 시 표시하며 미완료 조합의 …는 스크롤 조합 텍스트 열에서만 확인합니다."])
     info.append(["길이 제한", "Excel 셀은 최대 32767자. 초과 시 잘림 표시; 전체 값은 같은 이름의 JSON 참조."])
     for sheet in book:
         sheet.freeze_panes = "A2"

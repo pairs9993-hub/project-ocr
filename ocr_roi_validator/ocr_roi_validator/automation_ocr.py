@@ -210,7 +210,9 @@ def verify_case(processor, session, case, preset, references, duration, fps, sto
             evidence = getattr(accumulators[roi_id], "evidence", None)
             if evidence is not None:
                 details.update(evidence.details())
-                roi.actual = evidence.assembled_text
+                from .horizontal_scroll import observed_display
+                roi.actual = observed_display(evidence, observed[roi_id])
+                details["display_source"] = "assembled" if evidence.passed else "raw_observations"
         roi.passed = roi_id in completed
         status = "PASS" if roi.passed else "CANCELLED" if reason == "CANCELLED" else "ERROR" if reason.startswith("ERROR") else "FAIL_TIMEOUT"
         result = {**asdict(roi), "score": scores.get(roi_id, 0), "details": details,

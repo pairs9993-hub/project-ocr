@@ -5,6 +5,16 @@ from ocr_roi_validator.scroll_merge import ScrollTextAccumulator
 
 
 class HorizontalEvidenceTests(unittest.TestCase):
+    def test_live_display_preserves_low_confidence_and_unaligned_text(self):
+        from ocr_roi_validator.scroll_merge import ScrollTextAccumulator
+        acc = ScrollTextAccumulator(expected_text='Temp. Agua fr\u00eda', track_observed_text=True)
+        acc.add('Temp. Agua fria', .1)
+        self.assertEqual(acc.display_text, 'Temp. Agua fria')
+        self.assertFalse(acc.cycle_complete)
+        acc.add('Temp. Agua frla', .99)
+        self.assertIn('Temp. Agua frla', acc.display_text)
+        self.assertNotIn('…', acc.display_text)
+
     def test_middle_start_and_wrap_preserve_sentence_start(self):
         evidence = HorizontalScrollEvidence('Centrifugado Extra Fuerte')
         frames = ['Extra Fuerte', 'Fuerte Centri', 'Centrifugado Ex', 'gado Extra Fue']
@@ -132,6 +142,21 @@ class AutomationScrollIntegrationTests(unittest.TestCase):
             result, _ = verify_case(proc, session, TestCase('tc', 2, 'test', 'p', []), saved,
                 Path(directory), 6, 1000, threading.Event(), Path(directory)/'output')
         return result
+
+    def test_accent_mismatch_remains_visible_in_automation(self):
+        result = self.verify(['Temp. Agua fria'], 'Temp. Agua fr\u00eda')
+        roi = result['rois'][0]
+        self.assertEqual(roi['actual'], 'Temp. Agua fria')
+        self.assertFalse(roi['passed'])
+        self.assertEqual(roi['details']['display_source'], 'raw_observations')
+
+    def test_missing_superscript_keeps_read_body_visible(self):
+        raw = 'Limpieza de boquillas ezdispense'
+        result = self.verify([raw], raw+'TM')
+        roi = result['rois'][0]
+        self.assertEqual(roi['actual'], raw)
+        self.assertFalse(roi['passed'])
+        self.assertIn('…', roi['details']['assembled_text'])
 
     def test_wrap_observation_confirms_and_raw_frames_remain_available(self):
         result = self.verify(['Extra Fuerte', 'Fuerte Centri', 'Centrifugado Ex', 'gado Extra Fue'],

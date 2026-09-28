@@ -782,7 +782,7 @@ class OCRValidatorGUI(AutomationWorkflow, ROIPresetWorkflow):
                 )
                 continue
             if use_accumulator_results and getattr(live_accumulator, "evidence", None) is not None:
-                roi.actual = text_map.get(roi_id, live_accumulator.final_text)
+                roi.actual = live_accumulator.display_text
                 roi.passed = live_accumulator.cycle_complete
                 result_map[roi_id] = (roi.passed, f"{live_accumulator.coverage:.2f}",
                                       "PASS" if roi.passed else "SCANNING")
@@ -1387,7 +1387,8 @@ class OCRValidatorGUI(AutomationWorkflow, ROIPresetWorkflow):
             if isinstance(accumulator, VerticalListAccumulator):
                 accumulator.finalize()
             final_text = accumulator.final_text if accumulator is not None else ""
-            roi.actual = final_text
+            roi.actual = (accumulator.display_text if isinstance(accumulator, ScrollTextAccumulator)
+                          else final_text)
 
             if isinstance(accumulator, VerticalListAccumulator):
                 roi.passed = accumulator.passed
