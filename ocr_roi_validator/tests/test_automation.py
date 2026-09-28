@@ -358,6 +358,7 @@ class ReportWorkflowTests(unittest.TestCase):
         dialog.config = lambda: {"excel": str(Path(directory)/"tc.xlsx"), "zip": "vesta.zip",
                                  "references": directory, "roi_column": "ROI", "duration": 1, "fps": 1}
         cases = [TestCase("tc", i+2, f"Case {i}", "p", [f"command{i}"]) for i in range(2)]
+        cases[0].tc_number = "TC-101"
         p = processor()
         session.execute.side_effect = error
         with patch("ocr_roi_validator.automation_workflow.load_cases", return_value=(cases, {})), \
@@ -370,6 +371,8 @@ class ReportWorkflowTests(unittest.TestCase):
             else:
                 dialog.run()
         report = json.loads(next(Path(directory).glob("results_*.json")).read_text())
+        self.assertEqual([call.kwargs["values"] for call in dialog.tree.insert.call_args_list],
+                         [("TC-101", "Case 0", "p", "PENDING"), ("3", "Case 1", "p", "PENDING")])
         session.close.assert_called_once()
         self.assertIsNone(dialog.session)
         return report, session

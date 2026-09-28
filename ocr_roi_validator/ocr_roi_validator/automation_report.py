@@ -2,6 +2,8 @@
 from pathlib import Path
 import re
 import json
+from difflib import SequenceMatcher
+import unicodedata
 
 from openpyxl import Workbook
 from openpyxl.drawing.image import Image as ExcelImage
@@ -59,10 +61,38 @@ def superscript_rich_text(text, attachments):
     return CellRichText(parts)
 
 
+def text_diff(expected, actual):
+    """Literal character differences; missing characters remain visible in red."""
+    def clean(value):
+        return unicodedata.normalize("NFC", re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", str(value or "")))
+
+    def visible(value):
+        return value.replace(" ", "␠").replace("\t", "⇥").replace("\n", "↵")
+
+    expected, actual = clean(expected), clean(actual)
+    # Bound alignment work for diagnostic dumps; original columns retain the text.
+    limit = 4096
+    truncated = max(len(expected), len(actual)) > limit
+    expected, actual = expected[:limit], actual[:limit]
+    parts = []
+    red = InlineFont(color="FFFF0000")
+    for tag, i, j, a, b in SequenceMatcher(None, expected, actual, autojunk=False).get_opcodes():
+        if tag == "equal":
+            parts.append(actual[a:b])
+        elif tag == "delete":
+            parts.append(TextBlock(red, "[누락: " + visible(expected[i:j]) + "]"))
+        else:
+            parts.append(TextBlock(red, visible(actual[a:b])))
+    if truncated:
+        parts.append("\n[DIFF 일부 표시: 원문 열/JSON 참조]")
+    return CellRichText(parts or [""])
+
+
 def write_excel_report(path: Path, report):
     book = Workbook()
     rich_cells = []
     image_rows = []
+    diff_rows = []
     summary = book.active
     summary.title = "TC Summary"
     summary.append(["TC 번호", "시트", "Excel 행", "TC 제목", "정답지 이름", "사용 명령어", "ROI preset", "상태", "사유", "관찰 시간(초)", "합부(PASS/FAIL)"])
@@ -111,6 +141,7 @@ def write_excel_report(path: Path, report):
                 evidence.get("ocr_calls"), evidence.get("ocr_seconds"),
                 " / ".join(f"{item['position']}:{item['expected']}" for item in evidence.get("missing_characters", [])),
                 evidence.get("capture", {}).get("superseded_frames")])
+            diff_rows.append((detail.max_row, roi.get("expected", ""), roi.get("actual", "")))
             image_rows.append((detail.max_row, roi.get("representative_image", tc.get("representative_image"))))
             source = evidence.get("display_source", "raw_observations")
             if source in ("assembled", "evaluated_observations") or any(roi.get("actual") == t.get("evaluated_text")
@@ -126,6 +157,8 @@ def write_excel_report(path: Path, report):
         sheet.delete_cols(2, 2)
     detail.insert_cols(7)
     detail.cell(1, 7, "대표 이미지")
+    detail.insert_cols(10)
+    detail.cell(1, 10, "텍스트 DIFF")
     info = book.create_sheet("Run Info")
     info.append(["항목", "값"])
     for key in ("state", "started_at", "ended_at", "tc", "zip", "error"):
@@ -133,6 +166,7 @@ def write_excel_report(path: Path, report):
     info.append(["결과 구분", "PASS=검증 완료; FAIL_TIMEOUT=시간 내 미완료; ERROR=실행 오류; CANCELLED=사용자 중단; NOT_RUN=미실행"])
     info.append(["검출 텍스트", "조합이 완성되면 합부와 관계없이 조합 문장을 표시합니다. 미완성이면 실제 OCR 원문을 표시합니다. 검출 텍스트 셀의 메모에 표시 기준이 있습니다. 상세 프레임은 OCR Timing, 기존 진단 열은 숨김 해제로 확인합니다."])
     info.append(["윗첨자 좌표", "Script boxes: OCR 입력 이미지 내 픽셀 좌표 [왼쪽, 위, 오른쪽, 아래]. Script relations: body_box/script_box는 0부터 시작하는 영역 번호이며, 비율은 본문 높이 기준입니다."])
+    info.append(["텍스트 DIFF", "정답 대비 바뀌거나 추가된 검출 문자는 빨간색. 빠진 문자는 [누락: …]. 차이가 있는 공백=␠, 줄바꿈=↵, 탭=⇥. 대소문자/강세를 포함한 문자 그대로의 비교이며 합부 판정과 별개입니다. 긴 문구는 앞 4096자만 비교합니다."])
     info.append(["길이 제한", "Excel 셀은 최대 32767자. 초과 시 잘림 표시; 전체 값은 같은 이름의 JSON 참조."])
     for sheet in book:
         sheet.freeze_panes = "A2"
@@ -159,15 +193,18 @@ def write_excel_report(path: Path, report):
     detail.column_dimensions["D"].width = 45
     detail.column_dimensions["H"].width = 55
     detail.column_dimensions["I"].width = 65
-    detail.column_dimensions["R"].width = 65
+    detail.column_dimensions["J"].width = 65
+    detail.column_dimensions["S"].width = 65
     # Keep the established report schema while making the main result readable.
-    for col in range(16, detail.max_column+1):
+    for col in range(17, detail.max_column+1):
         detail.column_dimensions[get_column_letter(col)].hidden = True
     info.column_dimensions["B"].width = 110
     for cell, attachments in rich_cells:
         rendered = superscript_rich_text(cell.value, attachments)
         if isinstance(rendered, CellRichText):
             cell.value = rendered
+    for row, expected, actual in diff_rows:
+        detail.cell(row, 10).value = text_diff(expected, actual)
     for row, image_path in image_rows:
         if not image_path:
             detail.cell(row, 7, "대표 이미지 없음")

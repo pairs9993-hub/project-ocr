@@ -97,11 +97,11 @@ class AutomationDialog:
         self.calibrate_button.pack(side=tk.LEFT, padx=4)
         self.state = tk.StringVar(value="Ready — ZIP/TC를 첨부하세요. 첨부한 Vesta 실행 파일은 신뢰할 수 있는 파일이어야 합니다.")
         ttk.Label(self.window, textvariable=self.state, wraplength=950).pack(fill=tk.X, padx=16, pady=8)
-        columns = ("sheet", "row", "title", "preset", "status")
+        columns = ("tc_number", "title", "preset", "status")
         self.tree = ttk.Treeview(self.window, columns=columns, show="headings", height=10)
         for col in columns:
-            self.tree.heading(col, text=col.upper())
-            self.tree.column(col, width=170 if col != "row" else 60)
+            self.tree.heading(col, text="TC 번호" if col == "tc_number" else col.upper())
+            self.tree.column(col, width=110 if col == "tc_number" else 170)
         self.tree.pack(fill=tk.BOTH, expand=True, padx=12)
         self.log = tk.Text(self.window, height=6, state="disabled", wrap="word")
         self.log.pack(fill=tk.X, padx=12, pady=8)
@@ -306,7 +306,7 @@ class AutomationDialog:
         self.results = []
         self.tree.delete(*self.tree.get_children())
         for i, case in enumerate(cases):
-            self.tree.insert("", tk.END, iid=str(i), values=(case.sheet, case.row, case.title, case.preset, "PENDING"))
+            self.tree.insert("", tk.END, iid=str(i), values=(case.tc_number or str(case.row), case.title, case.preset, "PENDING"))
 
         def execute():
             report = {"tc": values["excel"], "zip": values["zip"], "state": "RUNNING",

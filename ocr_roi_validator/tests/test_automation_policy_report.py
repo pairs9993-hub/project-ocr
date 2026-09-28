@@ -8,11 +8,12 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from openpyxl import load_workbook
+from openpyxl.cell.rich_text import TextBlock
 from PIL import Image
 
 from ocr_roi_validator.automation import Cancelled, TestCase, verification_options
 from ocr_roi_validator.automation_ocr import verify_case
-from ocr_roi_validator.automation_report import initial_result, write_excel_report
+from ocr_roi_validator.automation_report import initial_result, write_excel_report, text_diff
 from ocr_roi_validator.isolated_ocr import IsolatedOCR
 from ocr_roi_validator.verification_policy import CycleTracker
 import test_automation as helpers
@@ -158,6 +159,37 @@ class WatchdogTests(unittest.TestCase):
 
 
 class ExcelReportTests(unittest.TestCase):
+    def test_character_diff_roundtrip(self):
+        pairs = [("Código", "Codigo", "o"), ("Suciedad Pesado", "SuciedadPesado", "[누락: ␠]"),
+                 ("Temp. Agua fría", "Temp. Agua f fría", "␠f"),
+                 ("ezDispense™", "ezDispenseTM", "TM"), ("abc", "", "[누락: abc]"),
+                 ("=1+1", "=1+1", ""), ("é", "e\u0301", "")]
+        entry = initial_result(TestCase("tc", 2, "test", "p", []), preset())
+        entry["rois"] = [dict(roi_id=i, expected=e, actual=a, status="FAIL")
+                         for i, (e, a, _) in enumerate(pairs, 1)]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/"report.xlsx"
+            write_excel_report(path, {"results": [entry]})
+            book = load_workbook(path, rich_text=True)
+            sheet = book["ROI Results"]
+            self.assertEqual([sheet.cell(1, c).value for c in (8, 9, 10, 11)],
+                             ["정답 텍스트", "검출 텍스트", "텍스트 DIFF", "상태"])
+            self.assertFalse(sheet.column_dimensions["J"].hidden)
+            for row, (_, _, red) in enumerate(pairs, 2):
+                cell = sheet.cell(row, 10)
+                self.assertNotEqual(cell.data_type, "f")
+                blocks = cell.value if not isinstance(cell.value, str) else []
+                actual_red = "".join(block.text for block in blocks
+                                     if isinstance(block, TextBlock) and block.font.color.rgb == "FFFF0000")
+                self.assertEqual(actual_red, red)
+            book.close()
+
+    def test_diff_bounds_and_removes_illegal_controls(self):
+        result = str(text_diff("x"*10000, "=\x01"+"y"*10000))
+        self.assertNotIn("\x01", result)
+        self.assertIn("DIFF 일부 표시", result)
+        self.assertLess(len(result), 32767)
+
     def test_report_preserves_fields_and_never_executes_formulas(self):
         case = TestCase("tc_sheet", 9, "테스트", "roi_courseop", ["=HYPERLINK(\"bad\")", "second"],
                         image="answer.png", expected={1: "=1+1\n다음 줄"}, tc_number="TC-009")
@@ -209,8 +241,8 @@ class ExcelReportTests(unittest.TestCase):
                 book = load_workbook(path)
                 self.assertEqual(book["TC Summary"].max_row, 3)
                 if error:
-                    self.assertEqual(book["ROI Results"]["J2"].value, "CANCELLED")
-                    self.assertEqual(book["ROI Results"]["J3"].value, "NOT_RUN")
+                    self.assertEqual(book["ROI Results"]["K2"].value, "CANCELLED")
+                    self.assertEqual(book["ROI Results"]["K3"].value, "NOT_RUN")
                 book.close()
 
 
