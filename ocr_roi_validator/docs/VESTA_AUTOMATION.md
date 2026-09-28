@@ -397,3 +397,21 @@ trademark sign. An actually observed sign remains the sign and can pass normally
 A missing M is never supplied. Ordinary expected strings without U+2122 retain
 character-by-character alignment. Aligned start and coverage refer to alignment
 units in this case, not the expanded OCR string's character indices.
+
+
+### Unified detected-text display
+
+The main detected-text field now uses a complete observed reconstruction even if
+it fails comparison (for example Codigo versus Código). Completeness requires
+observed characters without vote ties, observed adjacency, and established word
+boundaries; it does not imply correctness. Incomplete reconstruction falls back
+to distinct raw observations. Thus an insertion error such as `Temp. Agua f fria`
+remains visible as read; unsupported insertion alignment does not replace it with
+an ellipsis or silently delete the extra character.
+
+Excel ROI Results keeps one visible detected-text column (J). Diagnostic columns
+Q onward, including raw frames and the former separate reconstruction column,
+are hidden by default for compatibility and can be unhidden. The cell comment
+identifies reconstructed text versus raw fallback. OCR Timing remains available
+for per-frame investigation. The same display selection applies to live horizontal
+OCR. This change does not alter capture, recognition, or PASS conditions.

@@ -67,6 +67,22 @@ class HorizontalEvidenceTests(unittest.TestCase):
             if text.endswith('T'):
                 self.assertNotIn('TM', evidence.assembled_text)
 
+    def test_unified_display_uses_complete_mismatch_but_keeps_insertion_raw(self):
+        from ocr_roi_validator.horizontal_scroll import observed_display
+        evidence = HorizontalScrollEvidence('Licencias de C\u00f3digo Abierto')
+        frames = ['Licencias de Codigo', 'de Codigo Abierto']
+        for _ in range(2):
+            for text in frames:
+                evidence.add(text)
+        self.assertTrue(evidence.assembly_complete)
+        self.assertFalse(evidence.passed)
+        self.assertEqual(observed_display(evidence, frames), 'Licencias de Codigo Abierto')
+        insertion = HorizontalScrollEvidence('Temp. Agua fr\u00eda')
+        insertion.add('Temp. Agua f fria')
+        self.assertFalse(insertion.assembly_complete)
+        self.assertEqual(observed_display(insertion, ['Temp. Agua f fria']), 'Temp. Agua f fria')
+        self.assertFalse(insertion.passed)
+
     def test_middle_start_and_wrap_preserve_sentence_start(self):
         evidence = HorizontalScrollEvidence('Centrifugado Extra Fuerte')
         frames = ['Extra Fuerte', 'Fuerte Centri', 'Centrifugado Ex', 'gado Extra Fue']
@@ -224,7 +240,7 @@ class AutomationScrollIntegrationTests(unittest.TestCase):
         roi = result['rois'][0]
         self.assertEqual(roi['actual'], 'Temp. Agua fria')
         self.assertFalse(roi['passed'])
-        self.assertEqual(roi['details']['display_source'], 'raw_observations')
+        self.assertEqual(roi['details']['display_source'], 'assembled')
 
     def test_missing_superscript_keeps_read_body_visible(self):
         raw = 'Limpieza de boquillas ezdispense'

@@ -3,6 +3,7 @@ from pathlib import Path
 import re
 
 from openpyxl import Workbook
+from openpyxl.comments import Comment
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
@@ -75,12 +76,18 @@ def write_excel_report(path: Path, report):
                 evidence.get("ocr_calls"), evidence.get("ocr_seconds"),
                 " / ".join(f"{item['position']}:{item['expected']}" for item in evidence.get("missing_characters", [])),
                 evidence.get("capture", {}).get("superseded_frames")])
+            source = evidence.get("display_source", "raw_observations")
+            detail.cell(detail.max_row, 10).comment = Comment(
+                "조합 문장: 읽은 문자와 순서를 조합한 결과이며 PASS 여부는 별도입니다."
+                if source == "assembled" else
+                "OCR 원문: 조합이 미완성이므로 실제 읽힌 문구를 표시합니다. 프레임별 상세는 OCR Timing에서 확인하세요.",
+                "OCR Validator")
     info = book.create_sheet("Run Info")
     info.append(["항목", "값"])
     for key in ("state", "started_at", "ended_at", "tc", "zip", "error"):
         append_safe(info, [key, str(report.get(key, ""))])
     info.append(["결과 구분", "PASS=검증 완료; FAIL_TIMEOUT=시간 내 미완료; ERROR=실행 오류; CANCELLED=사용자 중단; NOT_RUN=미실행"])
-    info.append(["검출 텍스트", "가로 스크롤 검증이 미완료이면 읽은 OCR 원문을 표시합니다. 서로 다른 프레임은 구분선으로 분리합니다. 검증된 조합은 완료 시 표시하며 미완료 조합의 …는 스크롤 조합 텍스트 열에서만 확인합니다."])
+    info.append(["검출 텍스트", "조합이 완성되면 합부와 관계없이 조합 문장을 표시합니다. 미완성이면 실제 OCR 원문을 표시합니다. J열 메모에 표시 기준이 있습니다. 상세 프레임은 OCR Timing, 기존 진단 열은 숨김 해제로 확인합니다."])
     info.append(["길이 제한", "Excel 셀은 최대 32767자. 초과 시 잘림 표시; 전체 값은 같은 이름의 JSON 참조."])
     for sheet in book:
         sheet.freeze_panes = "A2"
@@ -106,6 +113,9 @@ def write_excel_report(path: Path, report):
     detail.column_dimensions["I"].width = 55
     detail.column_dimensions["J"].width = 65
     detail.column_dimensions["S"].width = 65
+    # Keep the established report schema while making the main result readable.
+    for col in range(17, detail.max_column+1):
+        detail.column_dimensions[get_column_letter(col)].hidden = True
     info.column_dimensions["B"].width = 110
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.stem+".tmp.xlsx")

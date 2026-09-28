@@ -178,6 +178,21 @@ class HorizontalScrollEvidence:
         return len(self.edges) == max(0, len(self.chars)-1)
 
     @property
+    def assembly_complete(self):
+        """A readable reconstruction is distinct from a matching verdict."""
+        if self.coverage != 1.0 or not self.order_valid:
+            return False
+        if any(self.winner(counts) is None for counts in self.letters):
+            return False
+        for position in range(1, len(self.chars)):
+            votes = self.gaps[position]
+            if self.expected_gaps[position] or votes.get(True):
+                winner = self.winner(votes)
+                if winner is None or votes[winner] < 2:
+                    return False
+        return True
+
+    @property
     def passed(self):
         if self.coverage != 1.0 or not self.order_valid:
             return False
@@ -188,7 +203,8 @@ class HorizontalScrollEvidence:
     def details(self):
         return {"missing_characters": [{"position": i+1, "expected": self.chars[i]}
                                        for i, counts in enumerate(self.letters) if not counts],
-                "assembled_text": self.assembled_text, "character_coverage": self.coverage,
+                "assembled_text": self.assembled_text, "assembly_complete": self.assembly_complete,
+                "character_coverage": self.coverage,
                 "spacing_status": self.spacing_status, "order_confirmed": self.order_valid,
                 "aligned_frames": self.aligned_frames, "ambiguous_frames": self.ambiguous_frames,
                 "unmatched_frames": self.unmatched_frames,
@@ -197,7 +213,7 @@ class HorizontalScrollEvidence:
 
 def observed_display(evidence, observations):
     """Keep incomplete/mismatched OCR visible without treating it as validated."""
-    if evidence.passed:
+    if evidence.assembly_complete:
         return evidence.assembled_text
     unique = list(dict.fromkeys(text for text in observations if text.strip()))
     return "\n--- frame ---\n".join(unique)

@@ -49,4 +49,8 @@ class SynchronousCaptureTests(unittest.TestCase):
             write_excel_report(path, {'results': [tc]})
             book = load_workbook(path)
             self.assertEqual(book['OCR Timing'].max_row, 1+sum(r['details']['ocr_calls'] for r in report['rois']))
+            self.assertTrue(book['ROI Results'].column_dimensions['V'].hidden)
+            self.assertTrue(book['ROI Results'].column_dimensions['S'].hidden)
+            self.assertFalse(book['ROI Results'].column_dimensions['J'].hidden)
+            self.assertIsNotNone(book['ROI Results']['J2'].comment)
             book.close()
