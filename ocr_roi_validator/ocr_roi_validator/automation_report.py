@@ -41,7 +41,7 @@ def write_excel_report(path: Path, report):
     summary.append(["TC 번호", "시트", "Excel 행", "TC 제목", "정답지 이름", "사용 명령어", "ROI preset", "상태", "사유", "관찰 시간(초)", "합부(PASS/FAIL)"])
     detail = book.create_sheet("ROI Results")
     detail.append(["TC 번호", "시트", "Excel 행", "TC 제목", "정답지 이름", "사용 명령어", "ROI preset",
-                   "ROI ID", "정답 텍스트", "검출 텍스트", "상태", "사유", "점수", "완료 주기", "검증 모드", "합부(PASS/FAIL)"])
+                   "ROI ID", "정답 텍스트", "검출 텍스트", "상태", "사유", "점수", "완료 주기", "검증 모드", "합부(PASS/FAIL)", "문자 관측률", "공백 판정", "프레임별 OCR 원문"])
     for tc in report["results"]:
         common = [tc.get("tc_number", str(tc["row"])), tc["sheet"], tc["row"], tc["title"], tc.get("image", ""),
                   "\n".join(tc.get("commands", [])), tc["preset"]]
@@ -50,13 +50,15 @@ def write_excel_report(path: Path, report):
             evidence = roi.get("details", {})
             append_safe(detail, common + [roi["roi_id"], roi.get("expected", ""), roi.get("actual", ""),
                 roi.get("status", "PASS" if roi.get("passed") else "FAIL"), roi.get("reason", ""), roi.get("score"),
-                evidence.get("completed_cycles"), evidence.get("mode", ""), verdict(roi.get("status", "PASS" if roi.get("passed") else "FAIL"))])
+                evidence.get("completed_cycles"), evidence.get("mode", ""), verdict(roi.get("status", "PASS" if roi.get("passed") else "FAIL")),
+                evidence.get("character_coverage"), evidence.get("spacing_status", ""),
+                "\n--- frame ---\n".join(evidence.get("raw_observations", []))])
     info = book.create_sheet("Run Info")
     info.append(["항목", "값"])
     for key in ("state", "started_at", "ended_at", "tc", "zip", "error"):
         append_safe(info, [key, str(report.get(key, ""))])
     info.append(["결과 구분", "PASS=검증 완료; FAIL_TIMEOUT=시간 내 미완료; ERROR=실행 오류; CANCELLED=사용자 중단; NOT_RUN=미실행"])
-    info.append(["검출 텍스트", "스크롤은 서로 다른 실제 OCR 출력 순서이며 --- frame ---로 구분. 전체 원문은 JSON에 보존."])
+    info.append(["검출 텍스트", "가로 스크롤은 정답으로 위치를 찾은 실제 관측 문자입니다. 미확인 구간은 …로 표시. 프레임별 원문은 별도 열과 JSON에 보존."])
     info.append(["길이 제한", "Excel 셀은 최대 32767자. 초과 시 잘림 표시; 전체 값은 같은 이름의 JSON 참조."])
     for sheet in book:
         sheet.freeze_panes = "A2"
@@ -81,6 +83,7 @@ def write_excel_report(path: Path, report):
             sheet.row_dimensions[row].height = 65
     detail.column_dimensions["I"].width = 55
     detail.column_dimensions["J"].width = 65
+    detail.column_dimensions["S"].width = 65
     info.column_dimensions["B"].width = 110
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.stem+".tmp.xlsx")

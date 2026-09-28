@@ -647,6 +647,12 @@ class OCRValidatorGUI(AutomationWorkflow, ROIPresetWorkflow):
                     result,
                 )
                 continue
+            if use_accumulator_results and getattr(live_accumulator, "evidence", None) is not None:
+                roi.actual = live_accumulator.final_text
+                roi.passed = live_accumulator.cycle_complete
+                result_map[roi_id] = (roi.passed, f"{live_accumulator.coverage:.2f}",
+                                      "PASS" if roi.passed else "SCANNING")
+                continue
             if roi.expected.strip():
                 cmp = compare_text(roi.expected, roi.actual, mode=mode, similarity_threshold=threshold)
                 roi.passed = cmp.passed
@@ -915,10 +921,17 @@ class OCRValidatorGUI(AutomationWorkflow, ROIPresetWorkflow):
                 expected_rows,
                 require_loop=self._scrolling_enabled(),
             )
+        try:
+            threshold = float(self.similarity_threshold_var.get())
+        except ValueError:
+            threshold = 0.9
         return ScrollTextAccumulator(
             min_length=max(1, min(3, len(normalize_ui_text(roi.expected)))),
             min_score=0.25,
             expected_text=roi.expected,
+            track_observed_text=True,
+            compare_mode=self.compare_mode_var.get(),
+            similarity_threshold=threshold,
         )
 
     def _scrolling_enabled(self) -> bool:

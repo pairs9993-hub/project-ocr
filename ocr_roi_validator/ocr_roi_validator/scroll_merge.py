@@ -91,6 +91,9 @@ class ScrollTextAccumulator:
     min_length: int = 3
     min_score: float = 0.25
     expected_text: str = ""
+    track_observed_text: bool = False
+    compare_mode: str = "exact"
+    similarity_threshold: float = 0.9
     best_text: str = ""
     best_score: float = 0.0
     accepted_count: int = 0
@@ -103,9 +106,15 @@ class ScrollTextAccumulator:
 
     def __post_init__(self) -> None:
         self.expected_text = normalize_scroll_text(self.expected_text)
+        self.evidence = None
+        if self.track_observed_text and self.expected_text:
+            from .horizontal_scroll import HorizontalScrollEvidence
+            self.evidence = HorizontalScrollEvidence(self.expected_text, self.compare_mode, self.similarity_threshold)
 
     def add(self, text: str, score: float, observed_at: float | None = None) -> bool:
         text = normalize_scroll_text(text)
+        if self.evidence is not None:
+            self.evidence.last_aligned = False
         if len(text) < self.min_length:
             return False
         if score < self.min_score:
@@ -113,6 +122,11 @@ class ScrollTextAccumulator:
 
         self.accepted_count += 1
         self.history.append(text)
+        if self.evidence is not None:
+            self.evidence.add(text)
+            self.best_text = self.evidence.assembled_text
+            self.best_score = max(self.best_score, score)
+            return self.evidence.last_aligned
         coverage_before = len(self._covered_positions)
         self._update_expected_coverage(text)
         if len(self._covered_positions) > coverage_before and observed_at is not None:
@@ -199,12 +213,16 @@ class ScrollTextAccumulator:
 
     @property
     def coverage(self) -> float:
+        if self.evidence is not None:
+            return self.evidence.coverage
         if not self.expected_text:
             return 0.0
         return len(self._covered_positions) / len(self.expected_text)
 
     @property
     def start_seen(self) -> bool:
+        if self.evidence is not None:
+            return bool(self.evidence.letters and self.evidence.letters[0])
         if not self.expected_text:
             return False
         edge_length = min(
@@ -215,6 +233,8 @@ class ScrollTextAccumulator:
 
     @property
     def end_seen(self) -> bool:
+        if self.evidence is not None:
+            return bool(self.evidence.letters and self.evidence.letters[-1])
         if not self.expected_text:
             return False
         edge_length = min(
@@ -226,10 +246,14 @@ class ScrollTextAccumulator:
 
     @property
     def cycle_complete(self) -> bool:
+        if self.evidence is not None:
+            return self.evidence.passed
         return self.start_seen and self.end_seen and self.order_valid and self.coverage >= 0.9
 
     @property
     def order_valid(self) -> bool:
+        if self.evidence is not None:
+            return self.evidence.order_valid
         return self._order_violations == 0
 
     @property
@@ -247,6 +271,8 @@ class ScrollTextAccumulator:
 
     @property
     def reconstructed_text(self) -> str:
+        if self.evidence is not None:
+            return self.evidence.assembled_text
         if not self.expected_text:
             return self.best_text
         reconstructed = "".join(

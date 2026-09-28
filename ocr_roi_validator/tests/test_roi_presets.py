@@ -35,6 +35,10 @@ def gui_stub():
         var.set.side_effect = lambda value, state=state: state.__setitem__(0, value)
         var.get.side_effect = lambda state=state: state[0]
         setattr(gui, attr, var)
+    gui.compare_mode_var = MagicMock()
+    gui.compare_mode_var.get.return_value = "exact"
+    gui.similarity_threshold_var = MagicMock()
+    gui.similarity_threshold_var.get.return_value = "0.9"
     for attr in ("expected_text", "roi_list", "result_tree", "_refresh_canvas", "_on_select_roi"):
         setattr(gui, attr, MagicMock())
     return gui

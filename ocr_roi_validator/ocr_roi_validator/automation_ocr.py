@@ -156,7 +156,9 @@ def verify_case(processor, session, case, preset, references, duration, fps, sto
                     scores[roi_id] = score
                     # A newly observed low-confidence/unrelated frame cannot confirm a cached success.
                     related = bool(ocr.text.strip()) and ocr.mean_score >= 0.25
-                    if scrolling and not comparison.passed:
+                    if scrolling and getattr(accumulators[roi_id], "evidence", None) is not None:
+                        related = related and accumulators[roi_id].evidence.last_aligned
+                    elif scrolling and not comparison.passed:
                         from .verification_policy import normalized
                         related = related and normalized(ocr.text) in normalized(roi.expected)
                     if confirmations[roi_id].add(eligible and related, time.monotonic()):
@@ -192,6 +194,12 @@ def verify_case(processor, session, case, preset, references, duration, fps, sto
             details["accumulated_text"] = acc.final_text
         # Never report expected-derived accumulator reconstructions as raw detected text.
         roi.actual = "\n--- frame ---\n".join(observed[roi_id]) if scrolling else text_map.get(roi_id, "")
+        if scrolling:
+            details["raw_observations"] = observed[roi_id]
+            evidence = getattr(accumulators[roi_id], "evidence", None)
+            if evidence is not None:
+                details.update(evidence.details())
+                roi.actual = evidence.assembled_text
         roi.passed = roi_id in completed
         status = "PASS" if roi.passed else "CANCELLED" if reason == "CANCELLED" else "ERROR" if reason.startswith("ERROR") else "FAIL_TIMEOUT"
         result = {**asdict(roi), "score": scores.get(roi_id, 0), "details": details,
