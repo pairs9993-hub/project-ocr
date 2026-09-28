@@ -49,6 +49,16 @@ class AutomationDialog:
         self.window.protocol("WM_DELETE_WINDOW", self.close)
         gui.root.protocol("WM_DELETE_WINDOW", self._close_application)
         self.variables = {}
+        # Reserve actions before expandable content so small screens keep them visible.
+        buttons = ttk.Frame(self.window, padding=10)
+        buttons.pack(fill=tk.X)
+        self.launch_button = ttk.Button(buttons, text="① Vesta 실행", command=self.launch)
+        self.launch_button.pack(side=tk.LEFT, padx=4)
+        self.run_button = ttk.Button(buttons, text="③ 자동화 검증 시작", command=self.run)
+        self.run_button.pack(side=tk.LEFT, padx=4)
+        ttk.Button(buttons, text="중지 / Vesta 종료", command=self.stop_run).pack(side=tk.LEFT, padx=4)
+        ttk.Button(buttons, text="닫기", command=self.close).pack(side=tk.RIGHT, padx=4)
+
         settings = ttk.Frame(self.window, padding=12)
         settings.pack(fill=tk.X)
         settings.columnconfigure(1, weight=1)
@@ -95,14 +105,6 @@ class AutomationDialog:
         self.tree.pack(fill=tk.BOTH, expand=True, padx=12)
         self.log = tk.Text(self.window, height=6, state="disabled", wrap="word")
         self.log.pack(fill=tk.X, padx=12, pady=8)
-        buttons = ttk.Frame(self.window, padding=10)
-        buttons.pack(fill=tk.X)
-        self.launch_button = ttk.Button(buttons, text="① Vesta 실행", command=self.launch)
-        self.launch_button.pack(side=tk.LEFT, padx=4)
-        self.run_button = ttk.Button(buttons, text="③ 자동화 검증 시작", command=self.run)
-        self.run_button.pack(side=tk.LEFT, padx=4)
-        ttk.Button(buttons, text="중지 / Vesta 종료", command=self.stop_run).pack(side=tk.LEFT, padx=4)
-        ttk.Button(buttons, text="닫기", command=self.close).pack(side=tk.RIGHT, padx=4)
         self.window.after(100, self.poll)
 
     def busy(self):
