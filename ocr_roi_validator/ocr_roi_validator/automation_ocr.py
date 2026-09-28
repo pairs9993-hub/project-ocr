@@ -183,7 +183,8 @@ def verify_case(processor, session, case, preset, references, duration, fps, sto
                     evidence = getattr(accumulators.get(roi_id), "evidence", None)
                     if evidence is not None:
                         timing.update(assembly_accepted=evidence.last_aligned, assembly_reason=evidence.last_reason,
-                                      aligned_start=evidence.last_start, character_coverage=evidence.coverage,
+                                      aligned_start=evidence.last_start, substitutions=list(evidence.last_substitutions),
+                                      character_coverage=evidence.coverage,
                                       spacing_status=evidence.spacing_status, order_confirmed=evidence.order_valid)
                     else:
                         timing["assembly_reason"] = "VERTICAL_EVALUATION" if scrolling else "STATIC_COMPARISON"
@@ -197,6 +198,7 @@ def verify_case(processor, session, case, preset, references, duration, fps, sto
                     related = bool(ocr.text.strip()) and ocr.mean_score >= 0.25
                     if scrolling and getattr(accumulators[roi_id], "evidence", None) is not None:
                         related = related and accumulators[roi_id].evidence.last_aligned
+                        related = related and not accumulators[roi_id].evidence.last_substitutions
                     elif scrolling and not comparison.passed:
                         from .verification_policy import normalized
                         related = related and normalized(ocr.text) in normalized(roi.expected)

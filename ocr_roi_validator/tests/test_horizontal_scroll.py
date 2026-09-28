@@ -15,6 +15,31 @@ class HorizontalEvidenceTests(unittest.TestCase):
         self.assertIn('Temp. Agua frla', acc.display_text)
         self.assertNotIn('…', acc.display_text)
 
+    def test_missing_accent_is_assembled_as_observed_and_fails(self):
+        evidence = HorizontalScrollEvidence('Licencias de C\u00f3digo Abierto')
+        for _ in range(2):
+            for text in ['Licencias de Codigo', 'de Codigo Abierto']:
+                evidence.add(text)
+        self.assertEqual(evidence.assembled_text, 'Licencias de Codigo Abierto')
+        self.assertEqual(evidence.coverage, 1)
+        self.assertTrue(evidence.order_valid)
+        self.assertFalse(evidence.passed)
+        self.assertEqual(evidence.last_reason, 'ALIGNED_WITH_SUBSTITUTIONS')
+        self.assertEqual(evidence.last_substitutions[0]['observed'], 'o')
+
+    def test_wrong_tail_letter_is_not_replaced_with_expected(self):
+        evidence = HorizontalScrollEvidence('Centrifugado Extra Fuerte')
+        for _ in range(2):
+            evidence.add('Centrifugado Extra Fuert3')
+        self.assertEqual(evidence.assembled_text, 'Centrifugado Extra Fuert3')
+        self.assertFalse(evidence.passed)
+
+    def test_ambiguous_approximate_positions_are_rejected(self):
+        evidence = HorizontalScrollEvidence('abcdefghXabcdefghY')
+        evidence.add('abcdefghZ')
+        self.assertEqual(evidence.coverage, 0)
+        self.assertFalse(evidence.last_aligned)
+
     def test_middle_start_and_wrap_preserve_sentence_start(self):
         evidence = HorizontalScrollEvidence('Centrifugado Extra Fuerte')
         frames = ['Extra Fuerte', 'Fuerte Centri', 'Centrifugado Ex', 'gado Extra Fue']
@@ -143,6 +168,16 @@ class AutomationScrollIntegrationTests(unittest.TestCase):
             result, _ = verify_case(proc, session, TestCase('tc', 2, 'test', 'p', []), saved,
                 Path(directory), 6, 1000, threading.Event(), Path(directory)/'output')
         return result
+
+    def test_automation_assembles_accent_error_but_does_not_pass(self):
+        result = self.verify(['Licencias de Codigo', 'de Codigo Abierto'], 'Licencias de C\u00f3digo Abierto')
+        roi = result['rois'][0]
+        self.assertEqual(result['status'], 'FAIL_TIMEOUT')
+        self.assertEqual(roi['details']['assembled_text'], 'Licencias de Codigo Abierto')
+        timing = roi['details']['frame_timings'][0]
+        self.assertEqual(timing['assembly_reason'], 'ALIGNED_WITH_SUBSTITUTIONS')
+        self.assertEqual(timing['substitutions'][0]['expected'], '\u00f3')
+        self.assertEqual(timing['substitutions'][0]['observed'], 'o')
 
     def test_each_frame_reports_alignment_reason_and_location(self):
         result = self.verify(['Limpieza de boquillas e', 'garbled', 'ezDispenseTM'],

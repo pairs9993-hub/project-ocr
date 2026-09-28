@@ -128,6 +128,7 @@ class ScrollTextAccumulator:
         if self.evidence is not None:
             self.evidence.last_aligned = False
             self.evidence.last_start = None
+            self.evidence.last_substitutions = []
             self.evidence.last_reason = "NOT_EVALUATED"
         if len(text) < self.min_length:
             if self.evidence is not None:

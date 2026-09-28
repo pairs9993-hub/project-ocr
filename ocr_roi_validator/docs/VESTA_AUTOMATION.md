@@ -367,3 +367,20 @@ Raw OCR and original boxes remain unchanged; evaluated text can become
 SUPERSCRIPT_TM_ATTACHED identifies an adjustment; NO_SEPARATE_TM_BOX means OCR did
 not provide a separate mark box; GEOMETRY_NOT_CONFIRMED means the layout criteria
 were not met. No additional OCR calls or capture scheduling changes are introduced.
+
+
+### Preserve substituted characters in horizontal assembly
+
+If no exact placement exists, observations of at least eight characters may be
+placed with at most one substitution per eight characters (maximum two). Placement
+must have an exact run of at least six characters and beat every other circular
+position by at least two errors. Ambiguous exact matches are never disambiguated
+by this fallback. Observed letters are stored unchanged and voted as before; no
+expected letter is inserted. Spacing, order, and final comparison still apply.
+
+OCR Timing labels these frames ALIGNED_WITH_SUBSTITUTIONS and records each actual
+letter and expected letter in Observed substitutions. For example `Codigo` can
+appear in a complete assembly and still fail against `Código` in exact mode.
+Such a frame cannot confirm a cached automation PASS. Insertions, deletions, short
+fragments, and extensive errors are outside this fallback's scope. Capture timing,
+OCR calls, and the separate raw-text display are unchanged.

@@ -20,6 +20,33 @@ def compact_observation(text):
     return chars, gaps
 
 
+def substitution_position(tokens, observed):
+    """Locate a long observation with few substitutions and an unambiguous margin.
+
+    No insertions/deletions: every observed character retains one actual position.
+    """
+    n, length = len(tokens), len(observed)
+    if length < 8 or length > n:
+        return None
+    maximum = min(2, length // 8)
+    doubled = tokens + tokens
+    ranked = []
+    for start in range(n):
+        differences = [i for i, char in enumerate(observed) if char != doubled[start+i]]
+        ranked.append((len(differences), start, differences))
+    ranked.sort()
+    errors, start, differences = ranked[0]
+    if not 1 <= errors <= maximum:
+        return None
+    if len(ranked) > 1 and ranked[1][0] < errors+2:
+        return None
+    # Require a substantial exactly matching run to anchor the placement.
+    boundaries = [-1] + differences + [length]
+    if max(b-a-1 for a,b in zip(boundaries, boundaries[1:])) < 6:
+        return None
+    return start, differences
+
+
 class HorizontalScrollEvidence:
     def __init__(self, expected, compare_mode="exact", threshold=0.9):
         self.expected = re.sub(r"\s+", " ", normalize_ui_text(expected)).strip()
@@ -32,6 +59,7 @@ class HorizontalScrollEvidence:
         self.last_aligned = False
         self.last_reason = "NOT_EVALUATED"
         self.last_start = None
+        self.last_substitutions = []
         self.aligned_frames = self.ambiguous_frames = self.unmatched_frames = 0
 
     def add(self, text):
@@ -39,6 +67,7 @@ class HorizontalScrollEvidence:
         self.last_aligned = False
         self.last_reason = "NOT_EVALUATED"
         self.last_start = None
+        self.last_substitutions = []
         n, length = len(self.chars), len(chars)
         if not n or length < min(3, n) or length > n:
             self.last_reason = "EMPTY_OR_LENGTH_OUT_OF_RANGE"
@@ -50,6 +79,13 @@ class HorizontalScrollEvidence:
         whole_text = re.sub(r"\s+", " ", normalize_ui_text(text)).strip()
         if length == n and whole_text.casefold() == self.expected.casefold():
             starts = [0]  # A complete, directly observed sentence needs no phase guess.
+        tolerant = substitution_position(self.tokens, observed) if not starts else None
+        if tolerant is not None:
+            start, offsets = tolerant
+            starts = [start]
+            self.last_substitutions = [{"position": (start+i) % n+1,
+                                        "expected": self.chars[(start+i) % n], "observed": chars[i]}
+                                       for i in offsets]
         if len(starts) != 1:
             if starts:
                 self.last_reason = "AMBIGUOUS_POSITION"
@@ -60,7 +96,7 @@ class HorizontalScrollEvidence:
             return
         start = starts[0]
         self.last_aligned = True
-        self.last_reason = "ALIGNED"
+        self.last_reason = "ALIGNED_WITH_SUBSTITUTIONS" if self.last_substitutions else "ALIGNED"
         self.last_start = start+1
         self.aligned_frames += 1
         for offset, char in enumerate(chars):
@@ -135,7 +171,7 @@ class HorizontalScrollEvidence:
                 "spacing_status": self.spacing_status, "order_confirmed": self.order_valid,
                 "aligned_frames": self.aligned_frames, "ambiguous_frames": self.ambiguous_frames,
                 "unmatched_frames": self.unmatched_frames,
-                "assembly_method": "unique_expected_alignment_of_observed_characters"}
+                "assembly_method": "unique_alignment_preserving_observed_substitutions"}
 
 
 def observed_display(evidence, observations):

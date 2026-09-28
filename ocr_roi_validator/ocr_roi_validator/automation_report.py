@@ -45,7 +45,7 @@ def write_excel_report(path: Path, report):
     trace = book.create_sheet("OCR Timing")
     trace.append(["TC number", "Sheet", "Row", "Preset", "ROI", "Frame", "Captured sec",
                   "OCR started sec", "OCR finished sec", "Status", "Raw text", "Evaluated text", "Assembly accepted", "Assembly reason",
-                  "Aligned start", "Character coverage", "Spacing", "Order confirmed", "TM adjustment"])
+                  "Aligned start", "Character coverage", "Spacing", "Order confirmed", "TM adjustment", "Observed substitutions"])
     for tc in report["results"]:
         common = [tc.get("tc_number", str(tc["row"])), tc["sheet"], tc["row"], tc["title"], tc.get("image", ""),
                   "\n".join(tc.get("commands", [])), tc["preset"]]
@@ -58,7 +58,9 @@ def write_excel_report(path: Path, report):
                     timing["ocr_finished_sec"], timing["status"], timing.get("raw_text", ""), timing.get("evaluated_text", ""),
                     timing.get("assembly_accepted"), timing.get("assembly_reason", ""), timing.get("aligned_start"),
                     timing.get("character_coverage"), timing.get("spacing_status", ""), timing.get("order_confirmed"),
-                    timing.get("superscript", {}).get("status", "")])
+                    timing.get("superscript", {}).get("status", ""),
+                    " / ".join(f"{item['position']}:{item['observed']} (expected {item['expected']})"
+                               for item in timing.get("substitutions", []))])
             append_safe(detail, common + [roi["roi_id"], roi.get("expected", ""), roi.get("actual", ""),
                 roi.get("status", "PASS" if roi.get("passed") else "FAIL"), roi.get("reason", ""), roi.get("score"),
                 evidence.get("completed_cycles"), evidence.get("mode", ""), verdict(roi.get("status", "PASS" if roi.get("passed") else "FAIL")),
