@@ -1,8 +1,48 @@
 """Conservative, image-only spacing evidence for an isolated Latin text line."""
 import re
 import unicodedata
+import hashlib
+import time
+from collections import OrderedDict
+from copy import deepcopy
 import numpy as np
 from PIL import Image, ImageOps
+
+
+# Bound the slow fallback independently of sentence length. The automation
+# worker's existing deadline/cancellation watchdog also covers these OCR calls.
+MAX_WORD_RETRY_REGIONS = 6
+MAX_WORD_RETRY_SECONDS = 6.0
+
+
+class WordRetryCache:
+    """Briefly suppress deterministic failures for byte-identical line inputs."""
+    def __init__(self):
+        self.failures = OrderedDict()
+
+    def key(self, image, text):
+        return (image.size, text, hashlib.sha256(image.convert('RGB').tobytes()).digest())
+
+    def get(self, key):
+        entry = self.failures.get(key)
+        if entry is None:
+            return None
+        expires, evidence = entry
+        if time.monotonic() >= expires:
+            del self.failures[key]
+            return None
+        self.failures.move_to_end(key)
+        return deepcopy(evidence)
+
+    def remember(self, key, evidence):
+        self.failures[key] = (time.monotonic()+10.0, deepcopy(evidence))
+        self.failures.move_to_end(key)
+        while len(self.failures) > 16:
+            self.failures.popitem(last=False)
+
+
+class _WordRetryBudgetReached(Exception):
+    pass
 
 
 def _runs(values):
@@ -80,7 +120,7 @@ def infer_spacing(image: Image.Image, raw_text: str):
 
 
 def word_regions(image):
-    """Find stable large blank gaps without requiring one component per letter."""
+    """Find image-defined word/punctuation regions, not OCR text boundaries."""
     gray = np.asarray(image.convert('L'))
     if min(gray.shape) < 6 or int(gray.max())-int(gray.min()) < 50:
         return []
@@ -105,7 +145,7 @@ def word_regions(image):
         baseline = float(np.median(gaps))
         minimum = max(baseline*2.5, baseline+max(2, height*.1), height*.15)
         wide = [(int(a[1]), int(b[0])) for a, b in zip(runs, runs[1:]) if b[0]-a[1] >= minimum]
-        if not 1 <= len(wide) <= 3:
+        if not 1 <= len(wide) < MAX_WORD_RETRY_REGIONS:
             return []
         candidates.append(wide)
     if len(candidates[0]) != len(candidates[1]):
@@ -120,39 +160,119 @@ def word_regions(image):
     return [(a, 0, b, image.height) for a, b in zip(edges, edges[1:])]
 
 
+def _isolated_horizontal_mark(image):
+    """Require a single, solid horizontal stroke at both image thresholds."""
+    gray = np.asarray(image.convert('L'))
+    if min(gray.shape) < 3 or int(gray.max())-int(gray.min()) < 50:
+        return False
+    threshold = _otsu(gray)
+    background = float(np.median(np.concatenate((gray[0], gray[-1], gray[:, 0], gray[:, -1]))))
+    for cutoff in (threshold, (threshold+background)/2):
+        ink = gray <= cutoff if background > threshold else gray > cutoff
+        rows, columns = _runs(ink.any(axis=1)), _runs(ink.any(axis=0))
+        if len(rows) != 1 or len(columns) != 1:
+            return False
+        y1, y2 = rows[0]
+        x1, x2 = columns[0]
+        if x2-x1 < 2*(y2-y1) or y2-y1 > image.height*.3 or ink[y1:y2, x1:x2].mean() < .75:
+            return False
+    return True
+
+
 def recognize_separated_words(image, raw_text, recognize):
+    started = time.monotonic()
+    calls = 0
+
+    def bounded_recognize(piece):
+        nonlocal calls
+        if calls >= MAX_WORD_RETRY_REGIONS or time.monotonic()-started >= MAX_WORD_RETRY_SECONDS:
+            raise _WordRetryBudgetReached()
+        calls += 1
+        return recognize(piece)
+
+    # A running native call is still covered by the automation watchdog. This
+    # local budget prevents launching further calls once its time is consumed.
+    evidence = {}
+    try:
+        text, evidence = _recognize_separated_words(image, raw_text, bounded_recognize, evidence)
+    except _WordRetryBudgetReached:
+        text = raw_text
+        evidence.update(status="UNCERTAIN", reason="WORD_RETRY_BUDGET_REACHED")
+    evidence.update(retry_seconds=round(time.monotonic()-started, 4),
+                    retry_seconds_limit=MAX_WORD_RETRY_SECONDS)
+    return text, evidence
+
+
+def _recognize_separated_words(image, raw_text, recognize, evidence):
     regions = word_regions(image)
+    evidence.update({"status": "UNCERTAIN", "raw_text": raw_text,
+                "method": "stable_gaps_independent_word_ocr", "word_regions": regions,
+                "word_ocr": [], "retry_outputs": [], "retry_calls": 0,
+                "retry_limit": MAX_WORD_RETRY_REGIONS})
     if not regions:
-        return raw_text, None
-    words = []
-    for rect in regions:
+        return raw_text, {**evidence, "reason": "NO_STABLE_REGIONS_WITHIN_BUDGET"}
+    normalized_raw = unicodedata.normalize('NFC', raw_text)
+    compact_raw = re.sub(r'\s+', '', normalized_raw)
+    def read_piece(rect):
         piece = image.crop(rect)
         background = tuple(int(v) for v in np.median(np.asarray(piece.convert('RGB'))[0], axis=0))
         piece = ImageOps.expand(piece, border=max(4, piece.height//4), fill=background)
         result = recognize(piece)
         text = unicodedata.normalize('NFC', result.text).strip()
-        if result.mean_score < .5 or len(text) < 2 or any(c.isspace() for c in text):
-            return raw_text, None
-        words.append(text)
-    if ''.join(words) != re.sub(r'\s+', '', unicodedata.normalize('NFC', raw_text)):
-        return raw_text, None
+        evidence['retry_calls'] += 1
+        evidence['retry_outputs'].append({'rect': rect, 'text': text, 'score': float(result.mean_score)})
+        return text, result.mean_score
+
+    words = evidence['word_ocr']
+    index = 0
+    while index < len(regions):
+        rect = regions[index]
+        text, score = read_piece(rect)
+        additions = [text]
+        # A tiny standalone dash may be read as "1" or not detected. Recheck it
+        # with the right-hand word, consuming that word's call budget. Only
+        # observed '-' plus image stroke geometry can enable this path.
+        if (text != '-' and compact_raw[len(''.join(words)):].startswith('-')
+                and index+1 < len(regions) and _isolated_horizontal_mark(image.crop(rect))):
+            next_rect = regions[index+1]
+            text, score = read_piece((rect[0], rect[1], next_rect[2], rect[3]))
+            if not text.startswith('-'):
+                return raw_text, {**evidence, "reason": "HYPHEN_CONTEXT_MISMATCH"}
+            tail = text[1:].strip()
+            if len(tail) < 2 or any(c.isspace() for c in tail):
+                return raw_text, {**evidence, "reason": "INVALID_WORD_OCR"}
+            additions = ['-', tail]
+            index += 1
+        if not np.isfinite(score) or score < .5:
+            return raw_text, {**evidence, "reason": "LOW_CONFIDENCE_WORD_OCR"}
+        # A separately recognized hyphen may stand between two image gaps.
+        # Never invent it, and retain the old minimum for other short fragments.
+        if any((len(part) < 2 and part != '-') or any(c.isspace() for c in part) for part in additions):
+            return raw_text, {**evidence, "reason": "INVALID_WORD_OCR"}
+        words.extend(additions)
+        if not compact_raw.startswith(''.join(words)):
+            return raw_text, {**evidence, "reason": "WORD_TEXT_MISMATCH"}
+        if len(additions) == 2:
+            evidence['hyphen_context_confirmed'] = True
+        index += 1
+    if ''.join(words) != compact_raw:
+        return raw_text, {**evidence, "reason": "WORD_TEXT_MISMATCH"}
     # Existing spaces must also be supported by the independent word OCR.
     candidate = ' '.join(words)
     offset, original_spaces = 0, set()
-    for char in raw_text.strip():
+    for char in normalized_raw.strip():
         if char.isspace():
             original_spaces.add(offset)
         else:
             offset += 1
     boundaries = set(np.cumsum([len(word) for word in words[:-1]]).tolist())
     if original_spaces - boundaries:
-        return raw_text, None
-    return candidate, {"status": "IMAGE_GAP_CONFIRMED", "raw_text": raw_text,
-                       "text": candidate, "method": "stable_gaps_independent_word_ocr",
-                       "word_regions": regions, "word_ocr": words}
+        return raw_text, {**evidence, "reason": "OCR_IMAGE_DISAGREEMENT"}
+    return candidate, {**evidence, "status": "IMAGE_GAP_CONFIRMED", "text": candidate,
+                       "boundaries": sorted(boundaries)}
 
 
-def apply_image_spacing(image, result, expected, recognize=None):
+def apply_image_spacing(image, result, expected, recognize=None, retry_cache=None):
     """Gate to complete single-box text with matching letters, then inspect pixels."""
     raw = result.text
     result.raw_text = raw
@@ -182,9 +302,21 @@ def apply_image_spacing(image, result, expected, recognize=None):
     line = image.crop(rect)
     text, evidence = infer_spacing(line, raw)
     if recognize is not None and evidence.get("reason") == "GLYPH_COUNT_MISMATCH":
-        candidate, retry_evidence = recognize_separated_words(line, raw, recognize)
-        if retry_evidence is not None:
+        key = retry_cache.key(line, raw) if retry_cache is not None else None
+        cached = retry_cache.get(key) if retry_cache is not None else None
+        if cached is not None:
+            candidate = raw
+            retry_evidence = {"status": "UNCERTAIN", "reason": "UNCHANGED_INPUT_COOLDOWN",
+                              "retry_calls": 0, "retry_seconds": 0.0,
+                              "previous_attempt": cached}
+        else:
+            candidate, retry_evidence = recognize_separated_words(line, raw, recognize)
+            if retry_cache is not None and retry_evidence.get("status") != "IMAGE_GAP_CONFIRMED" and retry_evidence.get("retry_calls", 0):
+                retry_cache.remember(key, retry_evidence)
+        if retry_evidence.get("status") == "IMAGE_GAP_CONFIRMED":
             text, evidence = candidate, retry_evidence
+        else:
+            evidence["word_retry"] = retry_evidence
     evidence["source_line_rect"] = rect
     result.spacing_evidence = evidence
     result.text = text

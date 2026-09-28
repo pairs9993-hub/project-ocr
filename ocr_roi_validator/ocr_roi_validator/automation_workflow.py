@@ -233,25 +233,27 @@ class AutomationDialog:
                 return
             target = selection_window(client_windows(self.session.pid), selector.result_rect)
             anchor = make_anchor(target, selector.result_rect)
-            mapped_rect(anchor, target.rect, preset["image_size"])
+            x1, y1, x2, y2 = selector.result_rect
+            capture_size = [x2-x1, y2-y1]
+            mapped_rect(anchor, target.rect, capture_size)
             # Preview the exact mapped ROI geometry before committing calibration.
-            preview_preset = {**preset, "capture_anchor": anchor}
+            preview_preset = {**preset, "capture_anchor": anchor, "capture_size": capture_size}
             import mss
             with mss.mss() as capture:
                 preview = self.session.frame(preview_preset, capture)
             self.show_preview(name, preview, preset)
             self.window.deiconify()
-            compatible = [key for key, value in self.gui.preset_library["presets"].items()
-                          if value["image_size"] == preset["image_size"]]
+            compatible = list(self.gui.preset_library["presets"])
             if not messagebox.askyesno("공통 화면 기준 저장",
-                    f"뒤의 메인 창에서 ROI 위치를 확인하세요.\n같은 기준 화면 크기의 프리셋 {len(compatible)}개와 이후 추가하는 프리셋에 공통 적용합니다.\n"
-                    "각 프리셋은 같은 화면 경계를 기준으로 작성되어 있어야 합니다. 기존 개별 기준보다 공통 기준을 우선 사용합니다. 저장할까요?",
+                    f"뒤의 메인 창에서 ROI 위치를 확인하세요.\n선택한 화면({capture_size[0]}×{capture_size[1]})을 "
+                    f"크기에 관계없이 프리셋 {len(compatible)}개와 이후 추가하는 프리셋에 공통 적용합니다.\n"
+                    "각 프리셋은 같은 화면 전체를 기준으로 작성되어 있어야 합니다. 기존 개별 기준보다 공통 기준을 우선 사용합니다. 저장할까요?",
                     parent=self.window):
                 return
-            updated = with_shared_capture(self.gui.preset_library, name, anchor)
+            updated = with_shared_capture(self.gui.preset_library, name, anchor, image_size=capture_size)
             save_library(self.gui.preset_path, updated)
             self.gui.preset_library = updated
-            self.log_line(f"공통 기준 저장 완료: {len(compatible)}개 프리셋에 적용 ({preset['image_size']}). JSON 내보내기로 공유할 수 있습니다.")
+            self.log_line(f"공통 기준 저장 완료: {len(compatible)}개 프리셋에 적용 ({capture_size}). JSON 내보내기로 공유할 수 있습니다.")
         except Exception as exc:
             messagebox.showerror("화면 기준 등록", str(exc), parent=self.window)
         finally:

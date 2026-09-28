@@ -84,6 +84,7 @@ class OCRInputRecord:
     raw_ocr_text: str = ""
     spacing_evidence: dict | None = None
     superscript_evidence: dict | None = None
+    overlap_evidence: dict | None = None
 
 
 def _save_failed_roi_diagnostic(
@@ -131,6 +132,8 @@ def _save_failed_roi_diagnostic(
             metadata["superscript"] = ocr_input.superscript_evidence
         if ocr_input.spacing_evidence:
             metadata["image_spacing"] = ocr_input.spacing_evidence
+        if ocr_input.overlap_evidence:
+            metadata["overlap"] = ocr_input.overlap_evidence
     elif preprocess is not None:
         saved_input = crop_roi(source_image, roi.rect, preprocess)
         metadata["ocr_input_fidelity"] = FIDELITY_RECONSTRUCTED
@@ -950,6 +953,17 @@ class OCRValidatorGUI(AutomationWorkflow, ROIPresetWorkflow):
 
         self._render_result_map(text_map)
 
+    def _apply_image_spacing(self, image, result, expected_text):
+        from .image_spacing import WordRetryCache, apply_image_spacing
+        language = self.language_var.get()
+        scope = (id(self.engine), language)
+        if getattr(self, '_spacing_retry_scope', None) != scope:
+            self._spacing_retry_scope = scope
+            self._spacing_retry_cache = WordRetryCache()
+        apply_image_spacing(image, result, expected_text,
+                            recognize=lambda piece: self.engine.run(piece, language),
+                            retry_cache=self._spacing_retry_cache)
+
     def _run_engine(
         self,
         image: Image.Image,
@@ -979,9 +993,7 @@ class OCRValidatorGUI(AutomationWorkflow, ROIPresetWorkflow):
         if record_as is not None and self._last_ocr_input is not None:
             # Raw recognizer output, before the expected-aware UI normalization.
             self._last_ocr_input.raw_ocr_text = result.text
-        from .image_spacing import apply_image_spacing
-        apply_image_spacing(image, result, expected_text,
-                            recognize=lambda piece: self.engine.run(piece, language))
+        self._apply_image_spacing(image, result, expected_text)
         if record_as is not None and self._last_ocr_input is not None:
             self._last_ocr_input.spacing_evidence = result.spacing_evidence
             if (result.spacing_evidence or {}).get("method") in ("stable_gaps_independent_word_ocr", "diacritic_scaled_retry"):
@@ -990,9 +1002,16 @@ class OCRValidatorGUI(AutomationWorkflow, ROIPresetWorkflow):
                                                   if result.spacing_evidence["method"] == "diacritic_scaled_retry"
                                                   else "spacing_word_retry")
         from .superscript import apply_superscripts
-        apply_superscripts(result)
+        from .overlap_ocr import apply_overlap_retry
+        result.overlap_evidence = None
+        # Context recognition is filtered to the ROI below. Retry only then,
+        # avoiding a second line call or adjusting text outside the ROI.
+        if record_as != "context":
+            apply_overlap_retry(image, result, lambda line: self.engine.recognize_line(line, language))
+        apply_superscripts(result, image)
         if record_as is not None and self._last_ocr_input is not None:
             self._last_ocr_input.superscript_evidence = result.superscript_evidence
+            self._last_ocr_input.overlap_evidence = result.overlap_evidence
         result.text = normalize_ocr_ui_text(result.text, expected_text)
         return result
 
@@ -1057,15 +1076,17 @@ class OCRValidatorGUI(AutomationWorkflow, ROIPresetWorkflow):
         context_ocr.mean_score = mean_score
         context_ocr.n_boxes = len(filtered)
         context_ocr.boxes = filtered
-        from .image_spacing import apply_image_spacing
-        apply_image_spacing(context_crop, context_ocr, expected_text,
-                            recognize=lambda piece: self.engine.run(piece, self.language_var.get()))
+        self._apply_image_spacing(context_crop, context_ocr, expected_text)
         if self._last_ocr_input is not None:
             self._last_ocr_input.spacing_evidence = context_ocr.spacing_evidence
         from .superscript import apply_superscripts
-        apply_superscripts(context_ocr)
+        from .overlap_ocr import apply_overlap_retry
+        apply_overlap_retry(context_crop, context_ocr,
+                            lambda line: self.engine.recognize_line(line, self.language_var.get()))
+        apply_superscripts(context_ocr, context_crop)
         if self._last_ocr_input is not None:
             self._last_ocr_input.superscript_evidence = context_ocr.superscript_evidence
+            self._last_ocr_input.overlap_evidence = context_ocr.overlap_evidence
         context_ocr.text = normalize_ocr_ui_text(context_ocr.text, expected_text)
         return context_ocr
 

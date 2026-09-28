@@ -21,6 +21,7 @@ class OCRRunResult:
     raw_text: str = ""
     spacing_evidence: dict | None = None
     superscript_evidence: dict | None = None
+    overlap_evidence: dict | None = None
 
 
 @dataclass
@@ -290,6 +291,17 @@ class OCREngine:
             tuple(p["det_mean"]),
             tuple(p["det_std"]),
         )
+
+    def recognize_line(self, image: Image.Image, language: str):
+        """One recognition-only call for an already localized horizontal line."""
+        if self.backend != "rapid":
+            return None
+        bgr = np.asarray(image.convert('RGB'))[:, :, ::-1].copy()
+        result, _ = self._engine_for_language(language)(bgr, use_det=False, use_cls=False)
+        if not result or len(result) != 1:
+            return None
+        text, score = result[0]
+        return OCRRunResult(str(text), float(score), 0, [])
 
     def run(
         self,

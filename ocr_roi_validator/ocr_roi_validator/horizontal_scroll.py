@@ -5,7 +5,7 @@ import re
 from .compare import compare_text, normalize_ui_text
 
 
-def compact_observation(text, group_trademark=False):
+def compact_observation(text, group_trademark=False, group_mc=False):
     text = re.sub(r"\s+", " ", normalize_ui_text(text)).strip()
     chars, gaps = [], {}
     space = False
@@ -17,15 +17,16 @@ def compact_observation(text, group_trademark=False):
             gaps[len(chars)] = space
         chars.append(char)
         space = False
-    if group_trademark:
+    if group_trademark or group_mc:
         grouped, grouped_gaps = [], {}
         index = 0
         while index < len(chars):
             if grouped:
                 grouped_gaps[len(grouped)] = gaps[index]
-            if (index+1 < len(chars) and chars[index:index+2] == ['T', 'M']
-                    and not gaps[index+1]):
-                grouped.append('TM')  # Actual two-letter observation, not the expected glyph.
+            pair = ''.join(chars[index:index+2])
+            if (index+1 < len(chars) and not gaps[index+1]
+                    and ((group_trademark and pair == 'TM') or (group_mc and pair.casefold() == 'mc'))):
+                grouped.append(pair)  # Preserve actual letters/case; grouping is placement only.
                 index += 2
             else:
                 grouped.append(chars[index])
@@ -65,7 +66,8 @@ class HorizontalScrollEvidence:
     def __init__(self, expected, compare_mode="exact", threshold=0.9):
         self.expected = re.sub(r"\s+", " ", normalize_ui_text(expected)).strip()
         self.group_trademark = "\u2122" in self.expected
-        self.chars, self.expected_gaps = compact_observation(self.expected, self.group_trademark)
+        self.group_mc = "\U0001f16a" in self.expected
+        self.chars, self.expected_gaps = compact_observation(self.expected, self.group_trademark, self.group_mc)
         self.tokens = tuple(self._placement_token(c) for c in self.chars)
         self.compare_mode, self.threshold = compare_mode, threshold
         self.letters = [Counter() for _ in self.chars]
@@ -81,10 +83,12 @@ class HorizontalScrollEvidence:
         # Equivalence is for positioning only. Final comparison keeps actual TM/™.
         if self.group_trademark and char in ("TM", "\u2122"):
             return "\u2122"
+        if self.group_mc and (char.casefold() == 'mc' or char == '\U0001f16a'):
+            return '\U0001f16a'
         return char.casefold()
 
     def add(self, text):
-        chars, gaps = compact_observation(text, self.group_trademark)
+        chars, gaps = compact_observation(text, self.group_trademark, self.group_mc)
         self.last_aligned = False
         self.last_reason = "NOT_EVALUATED"
         self.last_start = None
@@ -204,6 +208,9 @@ class HorizontalScrollEvidence:
         return {"missing_characters": [{"position": i+1, "expected": self.chars[i]}
                                        for i, counts in enumerate(self.letters) if not counts],
                 "assembled_text": self.assembled_text, "assembly_complete": self.assembly_complete,
+                "unresolved_characters": [
+                    {"position": i+1, "observed_votes": dict(counts)}
+                    for i, counts in enumerate(self.letters) if counts and self.winner(counts) is None],
                 "character_coverage": self.coverage,
                 "spacing_status": self.spacing_status, "order_confirmed": self.order_valid,
                 "aligned_frames": self.aligned_frames, "ambiguous_frames": self.ambiguous_frames,

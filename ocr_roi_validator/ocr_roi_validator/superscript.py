@@ -2,6 +2,8 @@
 from collections import Counter
 from dataclasses import replace
 import unicodedata
+import math
+import numpy as np
 from .ocr_engine import OCRBox, OCREngine
 
 
@@ -23,7 +25,9 @@ def superscript_text(text):
     """Render confirmed geometry, never infer it from unconfirmed OCR text."""
     if text == 'TM':
         return '\u2122'
-    if text in ('\u2122', '\u00ae'):
+    if text == 'MC':
+        return '\U0001f16a'
+    if text in ('\u2122', '\u00ae', '\U0001f16a'):
         return text
     converted = []
     for char in text:
@@ -37,7 +41,64 @@ def superscript_text(text):
     return ''.join(converted)
 
 
-def apply_superscripts(result):
+def _pixel_separation(image, body, mark):
+    """Resolve detector padding only when two thresholds show a real ink gap."""
+    from .image_spacing import _otsu, _runs
+    width = mark.max_x-mark.min_x
+    overlap = body.max_x-mark.min_x
+    if image is None or width <= 0 or not 0 < overlap <= .5*width or mark.max_x <= body.max_x:
+        return None
+    rect = (max(0, math.floor(body.min_x)), max(0, math.floor(min(body.min_y, mark.min_y))),
+            min(image.width, math.ceil(mark.max_x)), min(image.height, math.ceil(max(body.max_y, mark.max_y))))
+    if rect[2] <= rect[0] or rect[3] <= rect[1] or (rect[2]-rect[0])*(rect[3]-rect[1]) > 1_000_000:
+        return None
+    gray = np.asarray(image.crop(rect).convert('L'))
+    if int(gray.max())-int(gray.min()) < 50:
+        return None
+    threshold = _otsu(gray)
+    border = np.concatenate((gray[0], gray[-1], gray[:, 0], gray[:, -1]))
+    background = float(np.median(border))
+    foreground_pixels = gray[gray <= threshold] if background > threshold else gray[gray > threshold]
+    if not foreground_pixels.size:
+        return None
+    foreground = float(np.median(foreground_pixels))
+    confirmations = []
+    # Use foreground cores; low-contrast resampling halos are not glyph edges.
+    for cutoff in (threshold, (threshold+foreground)/2):
+        ink = gray <= cutoff if background > threshold else gray > cutoff
+        if not .02 <= ink.mean() <= .55:
+            return None
+        candidates = []
+        for start, end in _runs(~ink.any(axis=0)):
+            low, high = max(start, math.ceil(mark.min_x)-rect[0]), min(end, math.ceil(body.max_x)-rect[0])
+            if low >= high:
+                continue
+            split = int((low+high)//2)
+            bounds = []
+            for offset, mask in ((0, ink[:, :split]), (split, ink[:, split:])):
+                ys, xs = np.nonzero(mask)
+                if not len(xs):
+                    break
+                bounds.append((int(xs.min())+offset, int(ys.min()), int(xs.max())+offset+1, int(ys.max())+1))
+            if len(bounds) != 2:
+                continue
+            b, m = bounds
+            height = b[3]-b[1]
+            if (height > 0 and 0 < (m[3]-m[1])/height <= .7
+                    and .65*width <= m[2]-m[0] <= height
+                    and 0 < (m[0]-b[2])/height <= .35
+                    and -.5 <= (m[1]-b[1])/height <= .25
+                    and (b[3]-m[3])/height >= .2):
+                candidates.append({'body_ink_rect': [b[0]+rect[0], b[1]+rect[1], b[2]+rect[0], b[3]+rect[1]],
+                                   'script_ink_rect': [m[0]+rect[0], m[1]+rect[1], m[2]+rect[0], m[3]+rect[1]],
+                                   'gap_pixels': m[0]-b[2]})
+        if len(candidates) != 1:
+            return None
+        confirmations.append(candidates[0])
+    return {'method': 'stable_ink_separation', 'thresholds': confirmations}
+
+
+def apply_superscripts(result, image=None):
     boxes = result.boxes
     evidence = {"status": "NO_SEPARATE_REGION", "coordinate_space": "ocr_input_pixels",
                 "boxes": [], "relations": [], "attachments": []}
@@ -55,7 +116,7 @@ def apply_superscripts(result):
         # Bound the annotation length, not a list of product-specific strings.
         if not 1 <= len(text) <= 4 or any(c.isspace() for c in text):
             continue
-        if not any(c.isalnum() for c in text) and text not in ('™', '®', '*', '+', '−', '-'):
+        if not any(c.isalnum() for c in text) and text not in ('™', '®', '\U0001f16a', '*', '+', '−', '-'):
             continue
         candidates = []
         for body_index, body in enumerate(boxes):
@@ -74,7 +135,16 @@ def apply_superscripts(result):
             # Permit only a small overlap, bounded by both body and mark size.
             metrics['overlap_pixels'] = overlap
             metrics['overlap_limit_pixels'] = min(.15*height, .25*max(0, mark.max_x-mark.min_x))
+            # A lone letter near the crop edge may be the visible part of a
+            # word/annotation (O from OK, M from MC). Do not promote it without
+            # enough right-hand context. Multi-letter TM/MC keep their policy.
+            single_letter = len(text) == 1 and text.isalpha()
+            right_context = image.width-mark.max_x if image is not None else None
+            if single_letter:
+                metrics['right_context_pixels'] = right_context
             checks = dict(confidence=body.score >= .5 and mark.score >= .5,
+                          single_letter_confidence=not single_letter or mark.score >= .9,
+                          single_letter_context=(not single_letter or right_context is None or right_context >= height),
                           smaller=0 < metrics['height_ratio'] <= .7,
                           compact=0 < metrics['width_ratio'] <= 1,
                           adjacent=(metrics['gap_ratio'] <= .35
@@ -82,6 +152,11 @@ def apply_superscripts(result):
                                     and mark.max_x > body.max_x),
                           upper_position=-.5 <= metrics['top_offset_ratio'] <= .25,
                           raised_baseline=metrics['bottom_raise_ratio'] >= .2)
+            if not checks['adjacent'] and all(value for key, value in checks.items() if key != 'adjacent'):
+                pixels = _pixel_separation(image, body, mark)
+                if pixels is not None:
+                    checks['adjacent'] = True
+                    metrics['pixel_separation'] = pixels
             accepted = all(checks.values())
             evidence['relations'].append(dict(body_box=body_index, script_box=mark_index,
                 text=text, relation='superscript', geometry_confirmed=accepted,

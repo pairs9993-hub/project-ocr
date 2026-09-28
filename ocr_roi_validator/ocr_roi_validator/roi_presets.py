@@ -96,18 +96,22 @@ def excel_references(rows: list[tuple], column: int) -> list[tuple[int, str]]:
 
 
 def automation_preset(library: dict, name: str) -> dict:
-    """Resolve a shared screen without modifying stored per-preset geometry."""
+    """Capture the shared screen, then map it to this preset's own ROI coordinates."""
     from copy import deepcopy
     preset = deepcopy(library["presets"][name])
     shared = library.get("shared_capture")
-    if shared and shared["image_size"] == preset["image_size"]:
+    if shared:
         preset["capture_anchor"] = deepcopy(shared["capture_anchor"])
+        preset["capture_size"] = list(shared["image_size"])
     return preset
 
 
-def with_shared_capture(library: dict, name: str, anchor: dict) -> dict:
+def with_shared_capture(library: dict, name: str, anchor: dict, image_size=None) -> dict:
     from copy import deepcopy
     updated = deepcopy(library)
-    updated["shared_capture"] = {"image_size": list(library["presets"][name]["image_size"]),
+    # Legacy callers default to the selected preset's size; a new calibration
+    # records the actual selected screen size, independently of any preset.
+    selected_size = image_size if image_size is not None else library["presets"][name]["image_size"]
+    updated["shared_capture"] = {"image_size": list(selected_size),
                                  "capture_anchor": deepcopy(anchor)}
     return validate_library(updated)

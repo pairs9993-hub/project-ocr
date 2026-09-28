@@ -156,6 +156,9 @@ def verify_case(processor, session, case, preset, references, duration, fps, sto
                         script_evidence = getattr(ocr, "superscript_evidence", None)
                         if isinstance(script_evidence, dict):
                             timing["superscript"] = script_evidence
+                        overlap_evidence = getattr(ocr, "overlap_evidence", None)
+                        if isinstance(overlap_evidence, dict):
+                            timing["overlap"] = overlap_evidence
                     except Exception as exc:
                         timing["status"] = type(exc).__name__
                         raise
@@ -176,6 +179,7 @@ def verify_case(processor, session, case, preset, references, duration, fps, sto
                     spacing = getattr(ocr, "spacing_evidence", None)
                     if isinstance(spacing, dict):
                         spacing_evidence[roi_id] = spacing
+                        timing["image_spacing"] = spacing
                     trackers[roi_id].add(ocr.text)
                     comparison = compare_text(roi.expected, ocr.text, mode=processor.compare_mode_var.get(),
                                               similarity_threshold=float(processor.similarity_threshold_var.get()))
@@ -210,7 +214,15 @@ def verify_case(processor, session, case, preset, references, duration, fps, sto
                     elif scrolling and not comparison.passed:
                         from .verification_policy import normalized
                         related = related and normalized(ocr.text) in normalized(roi.expected)
-                    if confirmations[roi_id].add(eligible and related, time.monotonic()):
+                    confirmation = confirmations[roi_id]
+                    confirmed = confirmation.add(eligible and related, time.monotonic())
+                    timing.update(final_eligible=eligible, confirmation_related=related,
+                                  confirmation_samples=confirmation.samples,
+                                  confirmation_passed=confirmed,
+                                  confirmation_reason=("INELIGIBLE" if not eligible else
+                                      "UNRELATED_OR_SUBSTITUTED_FRAME" if not related else
+                                      "CONFIRMED" if confirmed else "WAITING_FOR_STABLE_CONFIRMATION"))
+                    if confirmed:
                         completed[roi_id] = time.monotonic()-started_at
                 if len(completed) == len(rois):
                     reason = "ALL_ROIS_PASSED"

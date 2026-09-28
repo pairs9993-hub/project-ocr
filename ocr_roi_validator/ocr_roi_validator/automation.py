@@ -381,9 +381,11 @@ class VestaSession:
     def frame(self, preset, capture_session):
         from .capture import grab_screen_rect_with
         window = choose_window(client_windows(self.pid), preset["capture_anchor"])
-        rect = mapped_rect(preset["capture_anchor"], window.rect, preset["image_size"])
+        rect = mapped_rect(preset["capture_anchor"], window.rect,
+                           preset.get("capture_size", preset["image_size"]))
         require_unobstructed(self.pid, rect)
         frame = grab_screen_rect_with(capture_session, rect)
+        # Keep each preset's ROI and reference-image coordinates unchanged.
         size = tuple(preset["image_size"])
         return frame if frame.size == size else frame.resize(size, Image.Resampling.LANCZOS)
 

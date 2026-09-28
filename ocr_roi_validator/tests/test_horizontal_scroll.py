@@ -5,6 +5,56 @@ from ocr_roi_validator.scroll_merge import ScrollTextAccumulator
 
 
 class HorizontalEvidenceTests(unittest.TestCase):
+    def test_full_coverage_reports_unresolved_votes_without_inventing_letters(self):
+        evidence = HorizontalScrollEvidence('Nettoyage de la buse ezDispense\U0001f16a')
+        for text in ['Nettoyage de la bus', ')use ezDispense\U0001f16a',
+                     'nse MC Nettoyage d', ':oyage de la buse ez']:
+            evidence.add(text)
+        details = evidence.details()
+        self.assertEqual(details['character_coverage'], 1)
+        self.assertEqual(details['missing_characters'], [])
+        self.assertFalse(details['assembly_complete'])
+        self.assertEqual(details['unresolved_characters'],
+                         [{'position': 28, 'observed_votes': {'\U0001f16a': 1, 'MC': 1}}])
+
+    def test_mc_pair_aligns_as_one_observed_token_without_wrapping_c(self):
+        expected = 'Nettoyage de la buse ezDispense\U0001f16a'
+        evidence = HorizontalScrollEvidence(expected)
+        for _ in range(3):
+            evidence.add('Nettoyage de la buse ezDispense MC')
+        self.assertEqual(evidence.letters[0], {'N': 3})
+        self.assertEqual(evidence.letters[-1], {'MC': 3})
+        self.assertEqual(evidence.assembled_text, 'Nettoyage de la buse ezDispense MC')
+        self.assertTrue(evidence.assembly_complete)
+        self.assertFalse(evidence.passed)
+
+    def test_mixed_case_mc_is_preserved_and_cannot_satisfy_raised_mc(self):
+        for suffix in ('MC', 'Mc', 'mc', 'mC'):
+            evidence = HorizontalScrollEvidence('Nettoyage de la buse ezDispense\U0001f16a')
+            for _ in range(2):
+                evidence.add('Nettoyage de la buse ezDispense'+suffix)
+            self.assertEqual(evidence.letters[-1], {suffix: 2})
+            self.assertTrue(evidence.assembled_text.endswith(suffix))
+            self.assertFalse(evidence.passed)
+
+    def test_plain_mc_votes_are_not_discarded_to_force_confirmed_mark(self):
+        expected = 'Nettoyage de la buse ezDispense\U0001f16a'
+        evidence = HorizontalScrollEvidence(expected)
+        for _ in range(2):
+            evidence.add(expected)
+            evidence.add('Nettoyage de la buse ezDispenseMC')
+        self.assertEqual(evidence.letters[-1], {'\U0001f16a': 2, 'MC': 2})
+        self.assertFalse(evidence.assembly_complete)
+        self.assertFalse(evidence.passed)
+
+    def test_mc_grouping_keeps_wraparound_context_order(self):
+        evidence = HorizontalScrollEvidence('Nettoyage de la buse ezDispense\U0001f16a')
+        evidence.add('nse MC Nettoyage d')
+        self.assertTrue(evidence.last_aligned)
+        self.assertEqual(evidence.letters[-1], {'MC': 1})
+        self.assertEqual(evidence.letters[0], {'N': 1})
+        self.assertFalse(evidence.passed)
+
     def test_live_display_preserves_low_confidence_and_unaligned_text(self):
         from ocr_roi_validator.scroll_merge import ScrollTextAccumulator
         acc = ScrollTextAccumulator(expected_text='Temp. Agua fr\u00eda', track_observed_text=True)

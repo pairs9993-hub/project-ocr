@@ -68,6 +68,54 @@ class CycleTests(unittest.TestCase):
 
 
 class MultiROITests(unittest.TestCase):
+    def replay_tc2(self, extra_frames=()):
+        from types import SimpleNamespace
+        frames = [
+            'Temp. Eau froide du rol', 'froide du robinet Tem',
+            'robinet Temp. Eau fr(', 'Temp. Eau froide du',
+            'Temp. Eau froide du rol', 'Temp. Eau froide du rol',
+            'p. Eau froide du robine', 'aut froide du robinet',
+            'oide du robinet Temp', ' du robinet Temp. Eal',
+            'urobinet Temp. Eau f', 'obinet Temp. Eau froic',
+            'net Temp. Eau froide', *extra_frames]
+        p = preset(scrolling=True)
+        p['rois'][0]['expected'] = 'Temp. Eau froide du robinet'
+        proc, session, clock = processor(), MagicMock(), [0.0]
+        observed = iter(frames)
+        def read(*args):
+            try:
+                text = next(observed)
+            except StopIteration:
+                raise TimeoutError('end of recorded observations')
+            clock[0] += 1
+            return SimpleNamespace(text=text, raw_text=text, mean_score=.99)
+        proc._run_roi_ocr = read
+        session.frame.return_value = Image.new('RGB', (320, 240))
+        with tempfile.TemporaryDirectory() as directory, \
+             patch('ocr_roi_validator.automation_ocr.time.monotonic', side_effect=lambda: clock[0]), \
+             patch('ocr_roi_validator.automation_ocr.mss.mss'):
+            result, _ = verify_case(proc, session, TestCase('tc', 2, 'TC2 replay', 'p', []), p,
+                                    Path(directory), 30, 1000, threading.Event(), Path(directory)/'result')
+        return result
+
+    def test_tc2_complete_assembly_does_not_bypass_frame_confirmation(self):
+        result = self.replay_tc2()
+        self.assertEqual(result['status'], 'FAIL_TIMEOUT')
+        details = result['rois'][0]['details']
+        self.assertEqual(details['mode'], 'content')
+        self.assertTrue(details['assembly_complete'])
+        returned = [t for t in details['frame_timings'] if t['status'] == 'RETURNED']
+        self.assertEqual(returned[-1]['confirmation_samples'], 1)
+        self.assertEqual(returned[-2]['confirmation_reason'], 'UNRELATED_OR_SUBSTITUTED_FRAME')
+        self.assertFalse(any(t['confirmation_passed'] for t in returned))
+
+    def test_tc2_next_clean_frame_confirms_content_without_a_cycle(self):
+        result = self.replay_tc2(['Temp. Eau froide du'])
+        self.assertEqual(result['status'], 'PASS')
+        details = result['rois'][0]['details']
+        self.assertEqual(details['completed_cycles'], 0)
+        self.assertEqual(details['frame_timings'][-1]['confirmation_reason'], 'CONFIRMED')
+
     def run_rois(self, mode="content", cancel=False, third_never_passes=False):
         p = preset()
         p["rois"] = [{"id": i, "rect": [i, 0, i+10, 20], "expected": f"Text {i}"} for i in (1, 2, 3)]
