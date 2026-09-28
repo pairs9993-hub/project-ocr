@@ -159,68 +159,192 @@ def _preview_selection_rect(monitor, preview_size, start, end):
 class ScreenAreaSelector(tk.Toplevel):
     def __init__(self, parent: tk.Tk, capture_rect: Rect | None = None):
         super().__init__(parent)
-        # Capture before showing any selector window; never stretch a desktop
-        # screenshot over monitors with different origins or DPI scales.
         self.withdraw()
         self.result_rect: Rect | None = None
+        self.selection = None
+        self._drawing = False
+        self._render_pending = None
         try:
             with mss.mss() as sct:
                 if capture_rect is None:
                     self.monitor = dict(sct.monitors[0])
                 else:
                     left, top, right, bottom = capture_rect
-                    self.monitor = {"left": left, "top": top,
-                                    "width": right-left, "height": bottom-top}
+                    self.monitor = {"left": left, "top": top, "width": right-left, "height": bottom-top}
                 shot = sct.grab(self.monitor)
             self.full_image = Image.frombytes("RGB", shot.size, shot.rgb)
-            available_width = max(1, min(1200, self.winfo_screenwidth()-100))
-            available_height = max(1, min(800, self.winfo_screenheight()-200))
-            scale = min(1.0, available_width / self.full_image.width,
-                        available_height / self.full_image.height)
-            self.preview_size = (max(1, round(self.full_image.width * scale)),
-                                 max(1, round(self.full_image.height * scale)))
-            preview = self.full_image.resize(self.preview_size, Image.Resampling.LANCZOS)
-            self.photo = ImageTk.PhotoImage(preview, master=self)
-            self.title("화면 기준 선택 — 미리보기에서 드래그")
-            self.resizable(False, False)
-            ttk.Label(self, text="아래 미리보기에서 기준 화면 전체를 드래그하세요. Esc: 취소",
-                      padding=8).pack(anchor=tk.W)
-            self.canvas = tk.Canvas(self, width=self.preview_size[0], height=self.preview_size[1],
-                                    highlightthickness=0, borderwidth=0, cursor="cross")
-            self.canvas.pack()
-            self.canvas.create_image(0, 0, anchor=tk.NW, image=self.photo)
-            self.start_x = self.start_y = 0
-            self.rect_id = None
+            self.title("화면 기준 선택 — 확대 후 정밀 선택")
+            self.resizable(True, True)
+            bar = ttk.Frame(self, padding=6)
+            bar.pack(fill=tk.X)
+            for label, command in (("전체 보기", self._fit), ("100%", lambda: self._zoom(1.0)),
+                                   ("200%", lambda: self._zoom(2.0)), ("400%", lambda: self._zoom(4.0))):
+                ttk.Button(bar, text=label, command=command).pack(side=tk.LEFT, padx=2)
+            self.zoom_label = tk.StringVar()
+            ttk.Label(bar, textvariable=self.zoom_label).pack(side=tk.LEFT, padx=8)
+            ttk.Button(bar, text="선택 확정", command=self._confirm).pack(side=tk.RIGHT, padx=2)
+            ttk.Button(bar, text="취소", command=self.destroy).pack(side=tk.RIGHT, padx=2)
+            ttk.Label(self, text="왼쪽 드래그: 영역 선택 | 휠: 확대/축소 | 오른쪽 드래그/스크롤바: 이동 | Enter: 확정 | Esc: 취소",
+                      wraplength=900, padding=6).pack(fill=tk.X)
+            coordinates = ttk.Frame(self, padding=6)
+            coordinates.pack(fill=tk.X)
+            self.coordinate_vars = []
+            for label in ("화면 X", "화면 Y", "너비(px)", "높이(px)"):
+                ttk.Label(coordinates, text=label).pack(side=tk.LEFT, padx=3)
+                var = tk.StringVar()
+                self.coordinate_vars.append(var)
+                ttk.Entry(coordinates, textvariable=var, width=8).pack(side=tk.LEFT)
+            ttk.Button(coordinates, text="좌표 적용", command=self._apply_coordinates).pack(side=tk.LEFT, padx=6)
+            area = ttk.Frame(self)
+            area.pack(fill=tk.BOTH, expand=True)
+            area.rowconfigure(0, weight=1)
+            area.columnconfigure(0, weight=1)
+            self.canvas = tk.Canvas(area, highlightthickness=0, borderwidth=0, cursor="cross", bg="#222222")
+            self.canvas.grid(row=0, column=0, sticky="nsew")
+            self.hscroll = ttk.Scrollbar(area, orient=tk.HORIZONTAL, command=lambda *a: self._scroll('x', *a))
+            self.vscroll = ttk.Scrollbar(area, orient=tk.VERTICAL, command=lambda *a: self._scroll('y', *a))
+            self.hscroll.grid(row=1, column=0, sticky="ew")
+            self.vscroll.grid(row=0, column=1, sticky="ns")
+            self.canvas.configure(xscrollcommand=self.hscroll.set, yscrollcommand=self.vscroll.set)
+            self.image_id = self.canvas.create_image(0, 0, anchor=tk.NW)
+            self.rect_id = self.canvas.create_rectangle(0, 0, 0, 0, outline="red", width=2, state="hidden")
+            self.preview_size = self.full_image.size
+            self.scale = 1.0
+            self.canvas.bind("<Configure>", lambda _e: self._queue_render())
             self.canvas.bind("<ButtonPress-1>", self._on_press)
             self.canvas.bind("<B1-Motion>", self._on_drag)
             self.canvas.bind("<ButtonRelease-1>", self._on_release)
+            self.canvas.bind("<ButtonPress-3>", lambda e: self.canvas.scan_mark(e.x, e.y))
+            self.canvas.bind("<B3-Motion>", self._pan)
+            self.canvas.bind("<MouseWheel>", self._wheel)
+            self.bind("<Return>", lambda _e: self._confirm())
             self.bind("<Escape>", lambda _e: self.destroy())
             self.protocol("WM_DELETE_WINDOW", self.destroy)
-            self.geometry("+30+30")
+            width = max(320, min(1400, self.winfo_screenwidth()-80))
+            height = max(300, min(950, self.winfo_screenheight()-100))
+            self.geometry(f"{width}x{height}+30+30")
             self.deiconify()
+            self.update_idletasks()
+            self._fit()
             self.lift()
             self.focus_force()
         except Exception:
             self.destroy()
             raise
 
+    def _queue_render(self):
+        if self._render_pending is None:
+            self._render_pending = self.after_idle(self._render_view)
+
+    def _render_view(self):
+        self._render_pending = None
+        # Render only the viewport, so 400% on several 4K monitors does not
+        # allocate a bitmap four times the entire desktop in each dimension.
+        x, y = self.canvas.canvasx(0), self.canvas.canvasy(0)
+        width, height = max(1, self.canvas.winfo_width()), max(1, self.canvas.winfo_height())
+        sx, sy = self.full_image.width/self.preview_size[0], self.full_image.height/self.preview_size[1]
+        view = self.full_image.transform((width, height), Image.Transform.AFFINE,
+                                        (sx, 0, x*sx, 0, sy, y*sy),
+                                        resample=Image.Resampling.NEAREST if self.scale >= 1 else Image.Resampling.BILINEAR)
+        self.photo = ImageTk.PhotoImage(view, master=self)
+        self.canvas.itemconfigure(self.image_id, image=self.photo)
+        self.canvas.coords(self.image_id, x, y)
+        self.canvas.tag_lower(self.image_id)
+
+    def _fit(self):
+        self._zoom(min(1.0, max(1, self.canvas.winfo_width())/self.full_image.width,
+                       max(1, self.canvas.winfo_height())/self.full_image.height))
+
+    def _zoom(self, scale, anchor=None):
+        if self._drawing:
+            return
+        if anchor is None:
+            anchor = (self.canvas.winfo_width()/2, self.canvas.winfo_height()/2)
+        old_width, old_height = self.preview_size
+        relative_x = self.canvas.canvasx(anchor[0])/old_width
+        relative_y = self.canvas.canvasy(anchor[1])/old_height
+        self.scale = max(0.01, min(4.0, scale))
+        self.preview_size = (max(1, round(self.full_image.width*self.scale)),
+                             max(1, round(self.full_image.height*self.scale)))
+        width, height = self.preview_size
+        self.canvas.configure(scrollregion=(0, 0, width, height))
+        self.canvas.xview_moveto(max(0, relative_x-anchor[0]/width))
+        self.canvas.yview_moveto(max(0, relative_y-anchor[1]/height))
+        self.zoom_label.set(f"{self.scale:.0%}")
+        self._draw_selection()
+        self._queue_render()
+
+    def _wheel(self, event):
+        if event.delta:
+            self._zoom(self.scale * (1.25 if event.delta > 0 else 0.8), (event.x, event.y))
+        return "break"
+
+    def _scroll(self, axis, *args):
+        getattr(self.canvas, axis+'view')(*args)
+        self._queue_render()
+
+    def _pan(self, event):
+        if not self._drawing:
+            self.canvas.scan_dragto(event.x, event.y, gain=1)
+            self._queue_render()
+
+    def _point(self, event):
+        return self.canvas.canvasx(event.x), self.canvas.canvasy(event.y)
+
     def _on_press(self, event):
-        self.start_x = event.x
-        self.start_y = event.y
-        if self.rect_id:
-            self.canvas.delete(self.rect_id)
-        self.rect_id = self.canvas.create_rectangle(event.x, event.y, event.x, event.y, outline="red", width=2)
+        self._drawing = True
+        self.drag_start = self._point(event)
 
     def _on_drag(self, event):
-        if self.rect_id:
-            self.canvas.coords(self.rect_id, self.start_x, self.start_y, event.x, event.y)
+        if self._drawing:
+            self.selection = _preview_selection_rect(self.monitor, self.preview_size, self.drag_start, self._point(event))
+            self._draw_selection()
+            self._sync_coordinates()
 
     def _on_release(self, event):
-        self.result_rect = _preview_selection_rect(
-            self.monitor, self.preview_size,
-            (self.start_x, self.start_y), (event.x, event.y),
-        )
-        self.destroy()
+        self._on_drag(event)
+        self._drawing = False
+
+    def _draw_selection(self):
+        if self.selection is None:
+            self.canvas.itemconfigure(self.rect_id, state="hidden")
+            return
+        x1, y1, x2, y2 = self.selection
+        sx, sy = self.preview_size[0]/self.monitor['width'], self.preview_size[1]/self.monitor['height']
+        self.canvas.coords(self.rect_id, (x1-self.monitor['left'])*sx, (y1-self.monitor['top'])*sy,
+                           (x2-self.monitor['left'])*sx, (y2-self.monitor['top'])*sy)
+        self.canvas.itemconfigure(self.rect_id, state="normal")
+
+    def _sync_coordinates(self):
+        values = ('', '', '', '') if self.selection is None else (
+            self.selection[0], self.selection[1], self.selection[2]-self.selection[0], self.selection[3]-self.selection[1])
+        for var, value in zip(self.coordinate_vars, values):
+            var.set(value)
+
+    def _apply_coordinates(self):
+        try:
+            x, y, width, height = (int(var.get()) for var in self.coordinate_vars)
+            m = self.monitor
+            if not (width >= 2 and height >= 2 and m['left'] <= x and m['top'] <= y
+                    and x+width <= m['left']+m['width'] and y+height <= m['top']+m['height']):
+                raise ValueError()
+        except ValueError:
+            messagebox.showwarning("영역 선택", "캡처 화면 안의 좌표와 2px 이상의 너비/높이를 입력하세요.", parent=self)
+            return False
+        self.selection = (x, y, x+width, y+height)
+        self._draw_selection()
+        return True
+
+    def _confirm(self):
+        if self._apply_coordinates():
+            self.result_rect = self.selection
+            self.destroy()
+
+    def destroy(self):
+        if self._render_pending is not None:
+            self.after_cancel(self._render_pending)
+            self._render_pending = None
+        super().destroy()
 
 
 class OCRValidatorGUI(AutomationWorkflow, ROIPresetWorkflow):
