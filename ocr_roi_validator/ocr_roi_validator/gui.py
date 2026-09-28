@@ -1,4 +1,5 @@
 from __future__ import annotations
+from .static_text import StaticTextAccumulator
 
 import hashlib
 import json
@@ -758,6 +759,12 @@ class OCRValidatorGUI(AutomationWorkflow, ROIPresetWorkflow):
             roi = self.rois[roi_id]
             roi.actual = text_map.get(roi_id, "")
             live_accumulator = self.live_accumulators.get(roi_id)
+            if use_accumulator_results and isinstance(live_accumulator, StaticTextAccumulator):
+                roi.actual = live_accumulator.final_text
+                roi.passed = live_accumulator.passed
+                result_map[roi_id] = (roi.passed, f"{live_accumulator.coverage:.2f}",
+                                      "PASS" if roi.passed else "FAIL")
+                continue
             if use_accumulator_results and isinstance(live_accumulator, VerticalListAccumulator):
                 roi.passed = live_accumulator.passed
                 all_rows_seen = live_accumulator.coverage == 1.0
@@ -775,7 +782,7 @@ class OCRValidatorGUI(AutomationWorkflow, ROIPresetWorkflow):
                 )
                 continue
             if use_accumulator_results and getattr(live_accumulator, "evidence", None) is not None:
-                roi.actual = live_accumulator.final_text
+                roi.actual = text_map.get(roi_id, live_accumulator.final_text)
                 roi.passed = live_accumulator.cycle_complete
                 result_map[roi_id] = (roi.passed, f"{live_accumulator.coverage:.2f}",
                                       "PASS" if roi.passed else "SCANNING")
@@ -974,9 +981,11 @@ class OCRValidatorGUI(AutomationWorkflow, ROIPresetWorkflow):
                             recognize=lambda piece: self.engine.run(piece, language))
         if record_as is not None and self._last_ocr_input is not None:
             self._last_ocr_input.spacing_evidence = result.spacing_evidence
-            if (result.spacing_evidence or {}).get("method") == "stable_gaps_independent_word_ocr":
+            if (result.spacing_evidence or {}).get("method") in ("stable_gaps_independent_word_ocr", "diacritic_scaled_retry"):
                 self._last_ocr_input.exact = False
-                self._last_ocr_input.path_kind = "spacing_word_retry"
+                self._last_ocr_input.path_kind = ("diacritic_scaled_retry"
+                                                  if result.spacing_evidence["method"] == "diacritic_scaled_retry"
+                                                  else "spacing_word_retry")
         result.text = normalize_ocr_ui_text(result.text, expected_text)
         return result
 
@@ -1056,6 +1065,9 @@ class OCRValidatorGUI(AutomationWorkflow, ROIPresetWorkflow):
             self._append_result_summary(text_map)
 
     def _new_live_accumulator(self, roi: ROIItem):
+        if not self._scrolling_enabled():
+            return StaticTextAccumulator(roi.expected, self.compare_mode_var.get(),
+                                         float(self.similarity_threshold_var.get()))
         expected_rows = [row for row in roi.expected.splitlines() if row.strip()]
         if not expected_rows:
             return ScrollTextAccumulator(min_length=3, min_score=0.25)
@@ -1104,7 +1116,9 @@ class OCRValidatorGUI(AutomationWorkflow, ROIPresetWorkflow):
         self.live_verify_var.set(True)
         modes = {
             (
-                "vertical"
+                "static"
+                if isinstance(accumulator, StaticTextAccumulator)
+                else "vertical"
                 if isinstance(accumulator, VerticalListAccumulator) and accumulator.require_loop
                 else "static-multiline"
                 if isinstance(accumulator, VerticalListAccumulator)
@@ -1396,6 +1410,10 @@ class OCRValidatorGUI(AutomationWorkflow, ROIPresetWorkflow):
                 if accumulator.missing_indices:
                     missing_rows = ",".join(str(index + 1) for index in accumulator.missing_indices)
                     self._append_live_log(f"ROI{roi_id} MISSING_ROWS={missing_rows}")
+            elif isinstance(accumulator, StaticTextAccumulator):
+                roi.passed = accumulator.passed
+                result = "PASS" if roi.passed else "FAIL"
+                score = f"{accumulator.coverage:.2f}"
             elif roi.expected.strip() and accumulator is not None and accumulator.expected_text:
                 roi.passed = accumulator.cycle_complete
                 result = "PASS" if roi.passed else "FAIL"

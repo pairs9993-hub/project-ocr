@@ -165,6 +165,8 @@ def apply_image_spacing(image, result, expected, recognize=None):
                                      if not unicodedata.combining(c))
         if base(raw) == base(expected):
             result.spacing_evidence = {"status": "UNCERTAIN", "reason": "DIACRITIC_MISMATCH", "raw_text": raw}
+            if recognize is not None and raw.strip() and len(result.boxes) == 1:
+                retry_diacritics(image, result, recognize)
         return
     if len(result.boxes) != 1:
         result.spacing_evidence = {"status": "UNCERTAIN", "reason": "REQUIRES_SINGLE_TEXT_BOX", "raw_text": raw}
@@ -186,3 +188,33 @@ def apply_image_spacing(image, result, expected, recognize=None):
     evidence["source_line_rect"] = rect
     result.spacing_evidence = evidence
     result.text = text
+
+
+def retry_diacritics(image, result, recognize):
+    """Accept only agreeing image OCR retries; expected text is never a candidate."""
+    from PIL import Image
+    raw = result.text
+    base = lambda value: ''.join(c for c in unicodedata.normalize('NFD', value)
+                                 if not unicodedata.combining(c))
+    evidence = result.spacing_evidence
+    evidence.update(method="diacritic_scaled_retry", retry_outputs=[])
+    # Keep the complete input so accents above detection boxes are not cropped off.
+    if image.width * image.height > 1_000_000:
+        evidence['retry_skipped'] = 'INPUT_TOO_LARGE'
+        return
+    candidates = []
+    for scale in (2, 3):
+        enlarged = image.resize((image.width*scale, image.height*scale), Image.Resampling.LANCZOS)
+        background = tuple(int(v) for v in np.median(np.asarray(enlarged.convert('RGB'))[0], axis=0))
+        enlarged = ImageOps.expand(enlarged.convert('RGB'), border=12, fill=background)
+        retry = recognize(enlarged)
+        text = unicodedata.normalize('NFC', retry.text).strip()
+        evidence['retry_outputs'].append({'scale': scale, 'text': text, 'score': retry.mean_score})
+        if retry.mean_score < .5 or base(text) != base(unicodedata.normalize('NFC', raw).strip()):
+            return
+        candidates.append(text)
+    if candidates[0] == candidates[1] and candidates[0] != unicodedata.normalize('NFC', raw).strip():
+        result.text = candidates[0]
+        result.mean_score = min(item['score'] for item in evidence['retry_outputs'])
+        evidence.update(status="DIACRITIC_RETRY_CONFIRMED", text=result.text)
+        evidence.pop('reason', None)

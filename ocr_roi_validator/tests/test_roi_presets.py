@@ -125,6 +125,7 @@ class WorkflowTests(unittest.TestCase):
     def test_explicit_horizontal_does_not_become_vertical_for_multiline_text(self):
         gui = gui_stub()
         gui.apply_roi_preset('roi_courseop')
+        gui.scroll_mode_var.set(True)
         self.assertIsInstance(gui._new_live_accumulator(gui.rois[1]), ScrollTextAccumulator)
 
     @patch('ocr_roi_validator.preset_workflow.messagebox.showerror')

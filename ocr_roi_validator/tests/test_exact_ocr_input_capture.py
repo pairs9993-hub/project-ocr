@@ -147,7 +147,7 @@ class RunOnceCaptureTests(unittest.TestCase):
         gui = _make_headless_gui(FakeEngine())
         source = make_image(400, 300)
         rect = (50, 40, 300, 160)
-        gui.rois[1] = ROIItem(roi_id=1, rect=rect, expected="Veuillez allumer l'eau.")
+        gui.rois[1] = ROIItem(roi_id=1, rect=rect, expected="Véuillez allumer l'eau.")
 
         result = gui._run_roi_ocr(source, rect, gui.rois[1].expected)
 

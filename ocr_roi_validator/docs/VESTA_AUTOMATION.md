@@ -262,3 +262,30 @@ OCR 원문은 **프레임별 OCR 원문** 및 실패 진단의 `ocr_raw_output`�
 `GLYPH_COUNT_MISMATCH`는 글자 구간 대응 실패, `DIACRITIC_MISMATCH`는 공백 이외에
 악센트 문자도 다르다는 의미입니다. `i`를 정답만 보고 `í`로 바꾸지 않습니다.
 마침표 등 일반 문장부호가 포함된 라틴 문구도 공백 분석 대상으로 허용합니다.
+
+
+### Static Start OCR and diacritic retries
+
+With Scrolling / Loop and Vertical Rows both OFF, Start OCR now compares complete
+stationary frames and displays the actual OCR text, including mismatches. It does
+not reconstruct a scrolling sentence. Save the preset again to use these settings
+in automation. Automatic live completion requires two matching observations at
+least 0.5 seconds apart with confidence >= 0.25.
+
+When a single detected text box differs from the expected text only in diacritics,
+the shared OCR path retries the complete input at 2x and 3x with Lanczos scaling
+and padding. Both OCR outputs must agree, have confidence >= 0.5, and retain the
+original base letters, spacing, and punctuation. The expected string is never
+substituted into the output. Disagreement preserves the original OCR result.
+Inputs above one million pixels skip retries. Scaling cannot restore image detail
+that was absent in the capture and may not fix a model's accent recognition.
+
+Diagnostics retain raw_text and retry_outputs (text, score, scale), under
+image_spacing with method diacritic_scaled_retry. Such captures are representative
+of multiple OCR inputs, not a claim of one exact inference input. Retries can add
+two OCR calls per applicable frame and share automation's observation deadline.
+
+Manual check: compare Run Once and Start OCR with both scrolling toggles OFF,
+expected `Temp. Agua fría`, and exact comparison. If OCR still reads `fria`, it
+must remain visible and FAIL. Test `Centrifugado Baja` and `Suciedad Pesado` too.
+Then enable horizontal scrolling and verify scrolling text still accumulates.
