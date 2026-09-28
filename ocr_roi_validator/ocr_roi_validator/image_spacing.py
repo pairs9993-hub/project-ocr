@@ -2,7 +2,7 @@
 import re
 import unicodedata
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps
 
 
 def _runs(values):
@@ -25,7 +25,7 @@ def infer_spacing(image: Image.Image, raw_text: str):
     """Never take expected text as input; abstain when glyph mapping is unclear."""
     evidence = {"status": "UNCERTAIN", "raw_text": raw_text, "method": "stable_column_gaps_v1"}
     compact = re.sub(r"\s+", "", unicodedata.normalize('NFC', raw_text))
-    if '\n' in raw_text or len(compact) < 4 or not all(c.isalpha() and 'LATIN' in unicodedata.name(c, '') for c in compact):
+    if '\n' in raw_text or len(compact) < 4 or not all((c.isalpha() and 'LATIN' in unicodedata.name(c, '')) or c in ".,:;!?'-" for c in compact):
         return raw_text, {**evidence, "reason": "UNSUPPORTED_TEXT"}
     gray = np.asarray(image.convert('L'))
     if min(gray.shape) < 6 or int(gray.max())-int(gray.min()) < 50:
@@ -79,13 +79,92 @@ def infer_spacing(image: Image.Image, raw_text: str):
                        "boundaries": boundaries, "gaps_px": gaps, "normal_gap_px": baseline}
 
 
-def apply_image_spacing(image, result, expected):
+def word_regions(image):
+    """Find stable large blank gaps without requiring one component per letter."""
+    gray = np.asarray(image.convert('L'))
+    if min(gray.shape) < 6 or int(gray.max())-int(gray.min()) < 50:
+        return []
+    threshold = _otsu(gray)
+    background = float(np.median(np.concatenate((gray[0], gray[-1], gray[:, 0], gray[:, -1]))))
+    dark = background > threshold
+    candidates = []
+    for cutoff in (threshold, (threshold+background)/2):
+        ink = gray <= cutoff if dark else gray > cutoff
+        if not .02 <= ink.mean() <= .55:
+            return []
+        rows = _runs(ink.any(axis=1))
+        if not rows:
+            return []
+        height = rows[-1][1]-rows[0][0]
+        if any(b[0]-a[1] > height*.2 for a, b in zip(rows, rows[1:])):
+            return []
+        runs = _runs(ink.any(axis=0))
+        if len(runs) < 5:
+            return []
+        gaps = [b[0]-a[1] for a, b in zip(runs, runs[1:])]
+        baseline = float(np.median(gaps))
+        minimum = max(baseline*2.5, baseline+max(2, height*.1), height*.15)
+        wide = [(int(a[1]), int(b[0])) for a, b in zip(runs, runs[1:]) if b[0]-a[1] >= minimum]
+        if not 1 <= len(wide) <= 3:
+            return []
+        candidates.append(wide)
+    if len(candidates[0]) != len(candidates[1]):
+        return []
+    cuts = []
+    for first, second in zip(*candidates):
+        left, right = max(first[0], second[0]), min(first[1], second[1])
+        if right <= left:
+            return []
+        cuts.append((left+right)//2)
+    edges = [0]+cuts+[image.width]
+    return [(a, 0, b, image.height) for a, b in zip(edges, edges[1:])]
+
+
+def recognize_separated_words(image, raw_text, recognize):
+    regions = word_regions(image)
+    if not regions:
+        return raw_text, None
+    words = []
+    for rect in regions:
+        piece = image.crop(rect)
+        background = tuple(int(v) for v in np.median(np.asarray(piece.convert('RGB'))[0], axis=0))
+        piece = ImageOps.expand(piece, border=max(4, piece.height//4), fill=background)
+        result = recognize(piece)
+        text = unicodedata.normalize('NFC', result.text).strip()
+        if result.mean_score < .5 or len(text) < 2 or any(c.isspace() for c in text):
+            return raw_text, None
+        words.append(text)
+    if ''.join(words) != re.sub(r'\s+', '', unicodedata.normalize('NFC', raw_text)):
+        return raw_text, None
+    # Existing spaces must also be supported by the independent word OCR.
+    candidate = ' '.join(words)
+    offset, original_spaces = 0, set()
+    for char in raw_text.strip():
+        if char.isspace():
+            original_spaces.add(offset)
+        else:
+            offset += 1
+    boundaries = set(np.cumsum([len(word) for word in words[:-1]]).tolist())
+    if original_spaces - boundaries:
+        return raw_text, None
+    return candidate, {"status": "IMAGE_GAP_CONFIRMED", "raw_text": raw_text,
+                       "text": candidate, "method": "stable_gaps_independent_word_ocr",
+                       "word_regions": regions, "word_ocr": words}
+
+
+def apply_image_spacing(image, result, expected, recognize=None):
     """Gate to complete single-box text with matching letters, then inspect pixels."""
     raw = result.text
     result.raw_text = raw
     result.spacing_evidence = None
     compact = lambda value: re.sub(r'\s+', '', unicodedata.normalize('NFC', value))
-    if not expected or raw == expected or compact(raw) != compact(expected):
+    if not expected or raw == expected:
+        return
+    if compact(raw) != compact(expected):
+        base = lambda value: ''.join(c for c in unicodedata.normalize('NFD', compact(value))
+                                     if not unicodedata.combining(c))
+        if base(raw) == base(expected):
+            result.spacing_evidence = {"status": "UNCERTAIN", "reason": "DIACRITIC_MISMATCH", "raw_text": raw}
         return
     if len(result.boxes) != 1:
         result.spacing_evidence = {"status": "UNCERTAIN", "reason": "REQUIRES_SINGLE_TEXT_BOX", "raw_text": raw}
@@ -98,6 +177,12 @@ def apply_image_spacing(image, result, expected):
             min(image.width, math.ceil(box.max_x)+2), min(image.height, math.ceil(box.max_y)+2))
     if rect[2] <= rect[0] or rect[3] <= rect[1]:
         return
-    text, evidence = infer_spacing(image.crop(rect), raw)
+    line = image.crop(rect)
+    text, evidence = infer_spacing(line, raw)
+    if recognize is not None and evidence.get("reason") == "GLYPH_COUNT_MISMATCH":
+        candidate, retry_evidence = recognize_separated_words(line, raw, recognize)
+        if retry_evidence is not None:
+            text, evidence = candidate, retry_evidence
+    evidence["source_line_rect"] = rect
     result.spacing_evidence = evidence
     result.text = text

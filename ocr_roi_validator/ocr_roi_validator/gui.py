@@ -970,9 +970,13 @@ class OCRValidatorGUI(AutomationWorkflow, ROIPresetWorkflow):
             # Raw recognizer output, before the expected-aware UI normalization.
             self._last_ocr_input.raw_ocr_text = result.text
         from .image_spacing import apply_image_spacing
-        apply_image_spacing(image, result, expected_text)
+        apply_image_spacing(image, result, expected_text,
+                            recognize=lambda piece: self.engine.run(piece, language))
         if record_as is not None and self._last_ocr_input is not None:
             self._last_ocr_input.spacing_evidence = result.spacing_evidence
+            if (result.spacing_evidence or {}).get("method") == "stable_gaps_independent_word_ocr":
+                self._last_ocr_input.exact = False
+                self._last_ocr_input.path_kind = "spacing_word_retry"
         result.text = normalize_ocr_ui_text(result.text, expected_text)
         return result
 
@@ -1038,7 +1042,8 @@ class OCRValidatorGUI(AutomationWorkflow, ROIPresetWorkflow):
         context_ocr.n_boxes = len(filtered)
         context_ocr.boxes = filtered
         from .image_spacing import apply_image_spacing
-        apply_image_spacing(context_crop, context_ocr, expected_text)
+        apply_image_spacing(context_crop, context_ocr, expected_text,
+                            recognize=lambda piece: self.engine.run(piece, self.language_var.get()))
         if self._last_ocr_input is not None:
             self._last_ocr_input.spacing_evidence = context_ocr.spacing_evidence
         context_ocr.text = normalize_ocr_ui_text(context_ocr.text, expected_text)
