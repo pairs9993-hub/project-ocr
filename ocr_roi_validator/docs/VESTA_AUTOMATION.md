@@ -321,26 +321,23 @@ Original frame OCR remains in its existing column. This display fix does not
 supply missing accents or superscript letters, or relax verification thresholds.
 
 
-### Latest-frame automation capture
+### Restore synchronous capture baseline (de22028)
 
-Automation captures independently of OCR, but retains only the latest waiting
-frame. When OCR finishes a frame, it receives the newest available screen rather
-than working through a FIFO backlog. Superseded frames are counted separately from
-frames rejected by the 128 MiB per-frame size limit. Confirmation uses capture
-timestamps. Cancellation stops the capture thread.
+The capture and recognition path is restored to de22028: capture one screen,
+process its ROIs sequentially, then capture the next screen at the existing FPS
+pacing. Background buffering, latest-frame replacement, the extra 30-second drain,
+and the newly added independent word retry are removed. Original image-spacing
+and diacritic retry behavior is retained exactly as in that baseline. Shared screen
+references and raw observed-text display remain available.
 
-The observation and OCR deadline is again at most 30 seconds; there is no extra
-30-second backlog-draining phase. This avoids spending the observation budget on
-many similar early frames. It does not guarantee seeing every scrolling character
-when OCR itself is too slow. Start OCR's manual capture loop is unchanged.
+Diagnostics add counts and relative monotonic timestamps without using them to
+change sampling, comparison, or confirmation. JSON frame_timings and Excel's
+OCR Timing sheet record every OCR attempt, including repeated identical outputs,
+with frame number, capture completion time, OCR start/end time, raw/evaluated text,
+and returned/error status. Captured/OCR counts include attempted work even if the
+deadline expires. Zero dropped/pending/superseded frames reflect the absence of a
+queue, not proof that every moment of a scrolling animation was sampled.
 
-ROI Results includes captured frames, superseded frames, dropped frames, pending
-frames (at most one), per-ROI OCR result count and processing seconds, and unobserved
-expected-character positions. Superseded frames are normal when OCR is slower than
-capture; they do not mean a verification failure by themselves.
-
-The expensive independent word retry added in 72f9d65 is disabled by default in
-both manual and automated OCR. It remains an explicitly opt-in internal function
-for testing, with no UI setting. Existing image-spacing and diacritic-only retries
-remain. Extra letters such as `Temp. Agua f fria` and tiny superscripts may still
-be misrecognized; raw output is preserved and verification is not relaxed.
+Compare the same TC, ROI presets, FPS, and observation duration before changing
+recognition settings. This restores implementation behavior, not a guarantee of
+recognition accuracy on a particular live screen.

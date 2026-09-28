@@ -169,7 +169,7 @@ class ExcelReportTests(unittest.TestCase):
             path = Path(directory)/"report.xlsx"
             write_excel_report(path, {"state": "CANCELLED", "results": [entry]})
             book = load_workbook(path, data_only=False)
-            self.assertEqual(book.sheetnames, ["TC Summary", "ROI Results", "Run Info"])
+            self.assertEqual(book.sheetnames, ["TC Summary", "ROI Results", "OCR Timing", "Run Info"])
             row = list(book["ROI Results"].iter_rows(min_row=2))[0]
             self.assertEqual(row[0].value, "TC-009")
             self.assertEqual(row[4].value, "answer.png")
