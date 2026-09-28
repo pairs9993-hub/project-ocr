@@ -5,6 +5,8 @@ import json
 
 from openpyxl import Workbook
 from openpyxl.comments import Comment
+from openpyxl.cell.rich_text import CellRichText, TextBlock
+from openpyxl.cell.text import InlineFont
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
@@ -36,8 +38,28 @@ def verdict(status):
     return "PASS" if status == "PASS" else "FAIL" if status in ("FAIL", "FAIL_TIMEOUT", "ERROR") else "N/A"
 
 
+def superscript_rich_text(text, attachments):
+    """Use Excel superscript formatting only for geometry-confirmed renderings."""
+    tokens = {item.get('rendered_text'): item.get('text', '') for item in attachments
+              if item.get('rendered_text') and item.get('rendered_text') not in ('\u2122', '\u00ae')
+              and item.get('rendered_text') != item.get('text')}
+    if not tokens or not isinstance(text, str):
+        return text
+    pattern = re.compile('|'.join(re.escape(token) for token in tokens))
+    parts, start = [], 0
+    for match in pattern.finditer(text):
+        parts.append(text[start:match.start()])
+        parts.append(TextBlock(InlineFont(vertAlign='superscript'), tokens[match.group()]))
+        start = match.end()
+    if not parts:
+        return text
+    parts.append(text[start:])
+    return CellRichText(parts)
+
+
 def write_excel_report(path: Path, report):
     book = Workbook()
+    rich_cells = []
     summary = book.active
     summary.title = "TC Summary"
     summary.append(["TC 번호", "시트", "Excel 행", "TC 제목", "정답지 이름", "사용 명령어", "ROI preset", "상태", "사유", "관찰 시간(초)", "합부(PASS/FAIL)"])
@@ -54,6 +76,7 @@ def write_excel_report(path: Path, report):
         append_safe(summary, common + [tc["status"], tc.get("reason", tc.get("error", "")), tc.get("elapsed_sec"), verdict(tc["status"])])
         for roi in tc.get("rois", []):
             evidence = roi.get("details", {})
+            confirmed_attachments = []
             for timing in evidence.get("frame_timings", []):
                 append_safe(trace, [tc.get("tc_number", str(tc["row"])), tc["sheet"], tc["row"], tc["preset"],
                     roi["roi_id"], timing["frame"], timing["captured_sec"], timing["ocr_started_sec"],
@@ -65,6 +88,12 @@ def write_excel_report(path: Path, report):
                                for item in timing.get("substitutions", [])),
                     json.dumps(timing.get("superscript", {}).get("boxes", []), ensure_ascii=False),
                     json.dumps(timing.get("superscript", {}).get("relations", []), ensure_ascii=False)])
+                script = timing.get("superscript", {})
+                if script.get("status") == "SUPERSCRIPT_ATTACHED":
+                    attachments = script.get("attachments", [])
+                    confirmed_attachments.extend(attachments)
+                    cell = trace.cell(trace.max_row, 12)
+                    rich_cells.append((cell, attachments))
             append_safe(detail, common + [roi["roi_id"], roi.get("expected", ""), roi.get("actual", ""),
                 roi.get("status", "PASS" if roi.get("passed") else "FAIL"), roi.get("reason", ""), roi.get("score"),
                 evidence.get("completed_cycles"), evidence.get("mode", ""), verdict(roi.get("status", "PASS" if roi.get("passed") else "FAIL")),
@@ -80,10 +109,13 @@ def write_excel_report(path: Path, report):
                 " / ".join(f"{item['position']}:{item['expected']}" for item in evidence.get("missing_characters", [])),
                 evidence.get("capture", {}).get("superseded_frames")])
             source = evidence.get("display_source", "raw_observations")
+            if source in ("assembled", "evaluated_observations") or any(roi.get("actual") == t.get("evaluated_text")
+                                               for t in evidence.get("frame_timings", [])):
+                rich_cells.append((detail.cell(detail.max_row, 10), confirmed_attachments))
             detail.cell(detail.max_row, 10).comment = Comment(
                 "조합 문장: 읽은 문자와 순서를 조합한 결과이며 PASS 여부는 별도입니다."
                 if source == "assembled" else
-                "OCR 원문: 조합이 미완성이므로 실제 읽힌 문구를 표시합니다. 프레임별 상세는 OCR Timing에서 확인하세요.",
+                "후처리 문구: 조합이 미완성이므로 윗첨자 등 확인된 후처리를 반영한 문구를 표시합니다. 원문은 Raw text에 보존됩니다. 프레임별 상세는 OCR Timing에서 확인하세요.",
                 "OCR Validator")
     info = book.create_sheet("Run Info")
     info.append(["항목", "값"])
@@ -121,6 +153,10 @@ def write_excel_report(path: Path, report):
     for col in range(17, detail.max_column+1):
         detail.column_dimensions[get_column_letter(col)].hidden = True
     info.column_dimensions["B"].width = 110
+    for cell, attachments in rich_cells:
+        rendered = superscript_rich_text(cell.value, attachments)
+        if isinstance(rendered, CellRichText):
+            cell.value = rendered
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.stem+".tmp.xlsx")
     try:

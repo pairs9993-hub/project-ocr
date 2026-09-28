@@ -22,7 +22,7 @@ class SuperscriptTests(unittest.TestCase):
         result = run_result(boxes)
         original = result.text
         apply_superscripts(result)
-        self.assertEqual(result.text, 'Limpieza de boquillas ezDispenseTM')
+        self.assertEqual(result.text, 'Limpieza de boquillas ezDispense\u2122')
         self.assertEqual(result.raw_text, original)
         self.assertEqual(result.boxes, boxes)
         self.assertEqual(result.superscript_evidence['status'], 'SUPERSCRIPT_ATTACHED')
@@ -55,17 +55,17 @@ class SuperscriptTests(unittest.TestCase):
         raw = value.text
         gui.engine.run.return_value = value
         result = gui._run_engine(Image.new('RGB',(200,70)), 'ezDispenseTM', record_as='direct')
-        self.assertEqual(result.text,'ezDispenseTM')
+        self.assertEqual(result.text,'ezDispense\u2122')
         gui.engine.run.assert_called_once()
         self.assertEqual(gui._last_ocr_input.raw_ocr_text,raw)
         self.assertTrue(gui._last_ocr_input.exact)
         self.assertEqual(gui._last_ocr_input.superscript_evidence['status'],'SUPERSCRIPT_ATTACHED')
 
     def test_generic_short_scripts_and_short_body(self):
-        for mark in ('MC', '2', 'a', '\u03b2', '\u00ae'):
+        for mark, rendered in [('MC','\u1d39\ua7f2'), ('2','\u00b2'), ('a','\u1d43'), ('\u03b2','\u1d5d'), ('\u00ae','\u00ae')]:
             value = run_result([box('x',(5,20,30,50)),box(mark,(33,15,51,30))])
             apply_superscripts(value)
-            self.assertEqual(value.text, 'x'+mark)
+            self.assertEqual(value.text, 'x'+rendered)
             evidence = value.superscript_evidence
             self.assertEqual(evidence['attachments'][0]['text'], mark)
             self.assertEqual(evidence['attachments'][0]['relation'], 'superscript')
@@ -114,7 +114,7 @@ class SuperscriptTests(unittest.TestCase):
         value = run_result([box('ezDispense',(6,6,154,37)),box('TM',(151,6,175,20))])
         raw = value.text
         apply_superscripts(value)
-        self.assertEqual(value.text,'ezDispenseTM')
+        self.assertEqual(value.text,'ezDispense\u2122')
         self.assertEqual(value.raw_text,raw)
         evidence = value.superscript_evidence
         self.assertEqual(evidence['status'],'SUPERSCRIPT_ATTACHED')
@@ -131,3 +131,57 @@ class SuperscriptTests(unittest.TestCase):
             apply_superscripts(value)
             self.assertEqual(value.text,raw)
             self.assertNotEqual(value.superscript_evidence['status'],'SUPERSCRIPT_ATTACHED')
+
+    def test_confirmed_tm_matches_trademark_but_baseline_tm_does_not(self):
+        from ocr_roi_validator.compare import compare_text
+        value = run_result([box('ezDispense',(4,4,219,38)),box('TM',(215,6,240,20))])
+        apply_superscripts(value)
+        self.assertTrue(compare_text('ezDispense\u2122', value.text, 'exact', .9).passed)
+        baseline = run_result([box('ezDispense',(4,4,219,38)),box('TM',(222,4,248,38))])
+        apply_superscripts(baseline)
+        self.assertFalse(compare_text('ezDispense\u2122', baseline.text, 'exact', .9).passed)
+
+    def test_unsupported_unicode_script_gets_real_excel_superscript_format(self):
+        from ocr_roi_validator.automation_report import superscript_rich_text
+        from openpyxl.cell.rich_text import TextBlock
+        value = run_result([box('body',(5,20,150,50)),box('Z',(153,15,171,30))])
+        apply_superscripts(value)
+        self.assertEqual(value.text,'body^{Z}')
+        rich = superscript_rich_text(value.text, value.superscript_evidence['attachments'])
+        blocks = [p for p in rich if isinstance(p,TextBlock)]
+        self.assertEqual(blocks[0].font.vertAlign, 'superscript')
+        self.assertEqual(blocks[0].text, 'Z')
+
+    def test_excel_round_trip_keeps_superscript_style(self):
+        import tempfile
+        from pathlib import Path
+        from openpyxl import load_workbook
+        from openpyxl.cell.rich_text import TextBlock
+        from ocr_roi_validator.automation_report import write_excel_report
+        value = run_result([box('body',(5,20,150,50)),box('Z',(153,15,171,30))])
+        apply_superscripts(value)
+        timing = dict(frame=1,captured_sec=0,ocr_started_sec=.1,ocr_finished_sec=.2,
+                      status='RETURNED',raw_text=value.raw_text,evaluated_text=value.text,
+                      superscript=value.superscript_evidence)
+        report = {'results':[dict(sheet='TC',row=2,title='script',preset='p',status='FAIL',
+                  rois=[dict(roi_id=1,actual=value.text,details={'display_source':'evaluated_observations',
+                                                            'frame_timings':[timing]})])]}
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder)/'report.xlsx'
+            write_excel_report(path,report)
+            book = load_workbook(path,rich_text=True)
+            for sheet, address in [('ROI Results','J2'),('OCR Timing','L2')]:
+                value = book[sheet][address].value
+                self.assertEqual(str(value),'bodyZ')
+                self.assertTrue(any(isinstance(part,TextBlock) and part.font.vertAlign == 'superscript' for part in value))
+            self.assertIsInstance(book['OCR Timing']['K2'].value,str)
+            book.close()
+
+    def test_mc_excel_uses_font_superscript_without_requiring_modifier_font(self):
+        from ocr_roi_validator.automation_report import superscript_rich_text
+        from openpyxl.cell.rich_text import TextBlock
+        value = run_result([box('brand',(5,20,150,50)),box('MC',(153,15,171,30))])
+        apply_superscripts(value)
+        rich = superscript_rich_text(value.text,value.superscript_evidence['attachments'])
+        self.assertEqual(str(rich),'brandMC')
+        self.assertTrue(any(isinstance(part,TextBlock) and part.text == 'MC' and part.font.vertAlign == 'superscript' for part in rich))

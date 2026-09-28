@@ -1,7 +1,40 @@
 """Infer separate superscript regions from geometry, preserving recognized text."""
 from collections import Counter
 from dataclasses import replace
+import unicodedata
 from .ocr_engine import OCRBox, OCREngine
+
+
+def _super_characters():
+    mapping = {}
+    for start, end in ((0x00B2, 0x00BB), (0x1D2C, 0x1DC0), (0x2070, 0x2080), (0xA7F2, 0xA7F5)):
+        for code in range(start, end):
+            char = chr(code)
+            decomposition = unicodedata.decomposition(char).split()
+            if len(decomposition) == 2 and decomposition[0] == '<super>':
+                mapping.setdefault(chr(int(decomposition[1], 16)), char)
+    return mapping
+
+
+_SUPER_CHARACTERS = _super_characters()
+
+
+def superscript_text(text):
+    """Render confirmed geometry, never infer it from unconfirmed OCR text."""
+    if text == 'TM':
+        return '\u2122'
+    if text in ('\u2122', '\u00ae'):
+        return text
+    converted = []
+    for char in text:
+        if char in _SUPER_CHARACTERS:
+            converted.append(_SUPER_CHARACTERS[char])
+        elif unicodedata.decomposition(char).startswith('<super>'):
+            converted.append(char)
+        else:
+            # Plain-text UI fallback; Excel uses real superscript formatting.
+            return '^{'+text+'}'
+    return ''.join(converted)
 
 
 def apply_superscripts(result):
@@ -70,14 +103,15 @@ def apply_superscripts(result):
     if not attachments:
         return
     evidence['attachments'] = [dict(body_box=body, script_box=mark,
-                                    text=boxes[mark].text.strip(), relation='superscript')
+                                    text=boxes[mark].text.strip(), rendered_text=superscript_text(boxes[mark].text.strip()),
+                                    relation='superscript')
                                for body, mark in attachments.items()]
     original, _ = OCREngine.text_from_boxes(boxes)
     if result.text != original:
         evidence['status'] = 'TEXT_ALREADY_ADJUSTED'
         return
     removed = set(attachments.values())
-    adjusted = [replace(b, text=b.text.rstrip()+boxes[attachments[i]].text.strip())
+    adjusted = [replace(b, text=b.text.rstrip()+superscript_text(boxes[attachments[i]].text.strip()))
                 if i in attachments else b for i, b in enumerate(boxes) if i not in removed]
     if not result.raw_text:
         result.raw_text = result.text

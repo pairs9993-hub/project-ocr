@@ -455,3 +455,26 @@ This handles the observed body rect [6,6,154,37] and TM rect [151,6,175,20]:
 3 pixels overlap is below the 4.65 pixel limit. Geometry diagnostics include
 `overlap_pixels` and `overlap_limit_pixels`. Substantial/contained overlaps are
 still rejected. The tolerance is geometric and applies to any supported annotation.
+
+
+### Render confirmed superscripts in detected/evaluated text
+
+Geometry-confirmed annotations now render as superscript: TM becomes the Unicode
+trademark sign, digits/letters use available Unicode superscript characters, and
+MC uses uppercase modifier letters. Only confirmed attachments are converted;
+normal baseline TM is not equivalent to the trademark sign. Thus a confirmed TM
+can match expected U+2122 in exact mode without changing the raw OCR. Other
+annotations are not blanket-normalized to baseline text for comparison.
+
+The desktop plain-text view uses `^{text}` if no Unicode superscript mapping exists.
+Excel detected/evaluated cells use actual superscript font runs for annotations
+other than the trademark/registered signs, so display does not require modifier
+letter font support. Raw text and Script boxes preserve original characters.
+JSON attachment evidence includes rendered_text. Unsupported plain-text notation
+is not silently removed for comparison.
+
+When assembly is incomplete, the detected-text display now falls back to evaluated
+observations (including confirmed superscripts), while raw_observations and Raw text
+remain unchanged for diagnosis. Capture scheduling and the geometry thresholds
+are unchanged. Exported Excel formatting is verified by reopening the workbook;
+live desktop rendering must still be checked on the target PC.
