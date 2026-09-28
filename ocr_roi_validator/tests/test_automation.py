@@ -204,6 +204,37 @@ class ArchiveSessionTests(unittest.TestCase):
         with self.assertRaises(Cancelled):
             session.execute(case, {}, stop)
 
+    def test_command_gaps_and_capture_wait_are_separate(self):
+        session = VestaSession(Path("lite"), Path("output"))
+        events = []
+        session.shell = lambda command, stop: events.append(command)
+        stop = MagicMock()
+        stop.is_set.return_value = False
+        stop.wait.side_effect = lambda seconds: events.append(seconds) or False
+        session.execute(TestCase("tc", 2, "test", "p", ["A", "B", "C"], delay=3), {}, stop)
+        self.assertEqual(events, ["A", 1.0, "B", 1.0, "C", 3])
+
+    def test_explicit_sleep_replaces_default_gap(self):
+        session = VestaSession(Path("lite"), Path("output"))
+        events = []
+        session.shell = lambda command, stop: events.append(command)
+        stop = MagicMock()
+        stop.is_set.return_value = False
+        stop.wait.side_effect = lambda seconds: events.append(seconds) or False
+        commands = ["A", ":API System.sleep { time: 2 }", "B", "C"]
+        session.execute(TestCase("tc", 2, "test", "p", commands), {}, stop)
+        self.assertEqual(events, ["A", 2.0, "B", 1.0, "C", 0])
+
+    def test_cancel_during_gap_does_not_send_next_command(self):
+        session = VestaSession(Path("lite"), Path("output"))
+        session.shell = MagicMock()
+        stop = MagicMock()
+        stop.is_set.return_value = False
+        stop.wait.return_value = True
+        with self.assertRaises(Cancelled):
+            session.execute(TestCase("tc", 2, "test", "p", ["A", "B"]), {}, stop)
+        self.assertEqual([c.args[0] for c in session.shell.call_args_list], ["A"])
+
     def test_reference_lookup_rejects_traversal_and_ambiguous_names(self):
         case = TestCase("tc", 2, "t", "p", [], image="../outside.png")
         with tempfile.TemporaryDirectory() as directory:

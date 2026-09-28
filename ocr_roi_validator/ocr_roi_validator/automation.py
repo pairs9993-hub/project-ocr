@@ -357,14 +357,21 @@ class VestaSession:
                 process.wait()
 
     def execute(self, case, tables, stop):
+        previous_was_shell = False
         for command in case.commands:
             check_cancel(stop)
             action, value = command_action(command, tables)
             if action == "sleep":
                 if stop.wait(value):
                     raise Cancelled()
+                previous_was_shell = False
             else:
+                # Explicit sleep commands replace the default inter-command wait.
+                if previous_was_shell and stop.wait(1.0):
+                    raise Cancelled()
+                check_cancel(stop)
                 self.shell(value, stop)
+                previous_was_shell = True
         if stop.wait(case.delay):
             raise Cancelled()
 
