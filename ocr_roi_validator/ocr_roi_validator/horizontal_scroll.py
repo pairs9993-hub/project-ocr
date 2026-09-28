@@ -30,13 +30,18 @@ class HorizontalScrollEvidence:
         self.gaps = [Counter() for _ in self.chars]
         self.edges = set()
         self.last_aligned = False
+        self.last_reason = "NOT_EVALUATED"
+        self.last_start = None
         self.aligned_frames = self.ambiguous_frames = self.unmatched_frames = 0
 
     def add(self, text):
         chars, gaps = compact_observation(text)
         self.last_aligned = False
+        self.last_reason = "NOT_EVALUATED"
+        self.last_start = None
         n, length = len(self.chars), len(chars)
         if not n or length < min(3, n) or length > n:
+            self.last_reason = "EMPTY_OR_LENGTH_OUT_OF_RANGE"
             self.unmatched_frames += 1
             return
         observed = tuple(c.casefold() for c in chars)
@@ -47,12 +52,16 @@ class HorizontalScrollEvidence:
             starts = [0]  # A complete, directly observed sentence needs no phase guess.
         if len(starts) != 1:
             if starts:
+                self.last_reason = "AMBIGUOUS_POSITION"
                 self.ambiguous_frames += 1
             else:
+                self.last_reason = "NO_EXACT_ALIGNMENT"
                 self.unmatched_frames += 1
             return
         start = starts[0]
         self.last_aligned = True
+        self.last_reason = "ALIGNED"
+        self.last_start = start+1
         self.aligned_frames += 1
         for offset, char in enumerate(chars):
             position = (start + offset) % n

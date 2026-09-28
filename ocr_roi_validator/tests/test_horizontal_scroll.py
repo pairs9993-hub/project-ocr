@@ -109,6 +109,7 @@ class HorizontalEvidenceTests(unittest.TestCase):
         self.assertTrue(accumulator.cycle_complete)
         accumulator.add('Suciedad Pesado', .1)
         self.assertFalse(accumulator.evidence.last_aligned)
+        self.assertEqual(accumulator.evidence.last_reason, 'LOW_CONFIDENCE')
         self.assertEqual(accumulator.final_text, 'Suciedad Pesado')
 
 class AutomationScrollIntegrationTests(unittest.TestCase):
@@ -142,6 +143,19 @@ class AutomationScrollIntegrationTests(unittest.TestCase):
             result, _ = verify_case(proc, session, TestCase('tc', 2, 'test', 'p', []), saved,
                 Path(directory), 6, 1000, threading.Event(), Path(directory)/'output')
         return result
+
+    def test_each_frame_reports_alignment_reason_and_location(self):
+        result = self.verify(['Limpieza de boquillas e', 'garbled', 'ezDispenseTM'],
+                             'Limpieza de boquillas ezDispenseTM')
+        timings = result['rois'][0]['details']['frame_timings']
+        aligned = [t for t in timings if t['evaluated_text'] == 'ezDispenseTM']
+        self.assertTrue(aligned)
+        self.assertEqual(aligned[0]['assembly_reason'], 'ALIGNED')
+        self.assertTrue(aligned[0]['assembly_accepted'])
+        self.assertGreater(aligned[0]['aligned_start'], 1)
+        rejected = [t for t in timings if t['evaluated_text'] == 'garbled']
+        self.assertEqual(rejected[0]['assembly_reason'], 'NO_EXACT_ALIGNMENT')
+        self.assertFalse(rejected[0]['assembly_accepted'])
 
     def test_accent_mismatch_remains_visible_in_automation(self):
         result = self.verify(['Temp. Agua fria'], 'Temp. Agua fr\u00eda')

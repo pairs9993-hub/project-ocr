@@ -133,7 +133,7 @@ def verify_case(processor, session, case, preset, references, duration, fps, sto
                         continue
                     if time.monotonic() >= deadline:
                         break
-                    timing = {"frame": captured_count,
+                    timing = {"frame": captured_count, "assembly_reason": "NOT_EVALUATED",
                               "captured_sec": round(captured_at-started_at, 4),
                               "ocr_started_sec": round(time.monotonic()-started_at, 4)}
                     timings[roi_id].append(timing)
@@ -147,12 +147,16 @@ def verify_case(processor, session, case, preset, references, duration, fps, sto
                         timing["raw_text"] = raw_output if isinstance(raw_output, str) and raw_output else ocr.text
                         timing["evaluated_text"] = ocr.text
                         timing["status"] = "RETURNED"
+                        tm = getattr(ocr, "superscript_evidence", None)
+                        if isinstance(tm, dict):
+                            timing["superscript"] = tm
                     except Exception as exc:
                         timing["status"] = type(exc).__name__
                         raise
                     finally:
                         timing["ocr_finished_sec"] = round(time.monotonic()-started_at, 4)
                     if time.monotonic() > deadline:
+                        timing["assembly_reason"] = "DEADLINE_BEFORE_EVALUATION"
                         raise TimeoutError("OCR observation deadline reached")
                     if processor._last_ocr_input is not None:
                         records[roi_id] = processor._last_ocr_input
@@ -176,6 +180,15 @@ def verify_case(processor, session, case, preset, references, duration, fps, sto
                         else:
                             acc.add(ocr.text, ocr.mean_score, observed_at=time.perf_counter())
                             eligible, score = acc.cycle_complete, acc.coverage
+                    evidence = getattr(accumulators.get(roi_id), "evidence", None)
+                    if evidence is not None:
+                        timing.update(assembly_accepted=evidence.last_aligned, assembly_reason=evidence.last_reason,
+                                      aligned_start=evidence.last_start, character_coverage=evidence.coverage,
+                                      spacing_status=evidence.spacing_status, order_confirmed=evidence.order_valid)
+                    else:
+                        timing["assembly_reason"] = "VERTICAL_EVALUATION" if scrolling else "STATIC_COMPARISON"
+                    timing["comparison_passed"] = comparison.passed
+                    timing["eligible"] = eligible
                     mode = case.roi_modes.get(roi_id, case.verification_mode)
                     if mode == "cycles":
                         eligible = eligible and trackers[roi_id].cycles >= case.required_cycles

@@ -44,7 +44,8 @@ def write_excel_report(path: Path, report):
                    "ROI ID", "정답 텍스트", "검출 텍스트", "상태", "사유", "점수", "완료 주기", "검증 모드", "합부(PASS/FAIL)", "문자 관측률", "공백 판정", "프레임별 OCR 원문", "이미지 공백 판정", "이미지 공백 상세", "스크롤 조합 텍스트", "캡처 수", "버린 프레임 수", "미처리 프레임 수", "ROI OCR 처리 수", "ROI OCR 시간(초)", "미관측 문자(위치:정답)", "최신 화면으로 교체한 프레임 수"])
     trace = book.create_sheet("OCR Timing")
     trace.append(["TC number", "Sheet", "Row", "Preset", "ROI", "Frame", "Captured sec",
-                  "OCR started sec", "OCR finished sec", "Status", "Raw text", "Evaluated text"])
+                  "OCR started sec", "OCR finished sec", "Status", "Raw text", "Evaluated text", "Assembly accepted", "Assembly reason",
+                  "Aligned start", "Character coverage", "Spacing", "Order confirmed", "TM adjustment"])
     for tc in report["results"]:
         common = [tc.get("tc_number", str(tc["row"])), tc["sheet"], tc["row"], tc["title"], tc.get("image", ""),
                   "\n".join(tc.get("commands", [])), tc["preset"]]
@@ -54,7 +55,10 @@ def write_excel_report(path: Path, report):
             for timing in evidence.get("frame_timings", []):
                 append_safe(trace, [tc.get("tc_number", str(tc["row"])), tc["sheet"], tc["row"], tc["preset"],
                     roi["roi_id"], timing["frame"], timing["captured_sec"], timing["ocr_started_sec"],
-                    timing["ocr_finished_sec"], timing["status"], timing.get("raw_text", ""), timing.get("evaluated_text", "")])
+                    timing["ocr_finished_sec"], timing["status"], timing.get("raw_text", ""), timing.get("evaluated_text", ""),
+                    timing.get("assembly_accepted"), timing.get("assembly_reason", ""), timing.get("aligned_start"),
+                    timing.get("character_coverage"), timing.get("spacing_status", ""), timing.get("order_confirmed"),
+                    timing.get("superscript", {}).get("status", "")])
             append_safe(detail, common + [roi["roi_id"], roi.get("expected", ""), roi.get("actual", ""),
                 roi.get("status", "PASS" if roi.get("passed") else "FAIL"), roi.get("reason", ""), roi.get("score"),
                 evidence.get("completed_cycles"), evidence.get("mode", ""), verdict(roi.get("status", "PASS" if roi.get("passed") else "FAIL")),

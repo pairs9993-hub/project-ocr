@@ -341,3 +341,29 @@ queue, not proof that every moment of a scrolling animation was sampled.
 Compare the same TC, ROI presets, FPS, and observation duration before changing
 recognition settings. This restores implementation behavior, not a guarantee of
 recognition accuracy on a particular live screen.
+
+
+### Per-frame alignment diagnosis and superscript TM
+
+OCR Timing now includes Assembly accepted/reason, one-based Aligned start (in the
+whitespace-free expected string), Character coverage, Spacing, Order confirmed,
+and TM adjustment. ALIGNED means placement was accepted, not that the whole ROI
+passed. NO_EXACT_ALIGNMENT means observed characters did not match a unique expected
+window; AMBIGUOUS_POSITION means multiple placements; LOW_CONFIDENCE and
+EMPTY_OR_TOO_SHORT are pre-alignment filters. DEADLINE_BEFORE_EVALUATION means OCR
+returned after its processing budget. Static/vertical evaluation is labeled
+separately. These diagnostics do not alter scroll matching or sampling.
+
+A separate uppercase TM box is attached to the unique adjacent body box only when
+its score and the body's score are >=0.5, its height is <=70% of the body height,
+its width is <= one body height, its horizontal gap is <=35% of body height,
+and its top/bottom place it above the baseline. Ambiguous, distant, normal-height,
+low-confidence or single-box `ezDispense TM` observations are not changed. This is
+a conservative layout heuristic, not verification of the exact trademark glyph
+or typeface. It never converts TM into the Unicode trademark sign.
+
+Raw OCR and original boxes remain unchanged; evaluated text can become
+`ezDispenseTM`. JSON and failure metadata preserve geometry evidence.
+SUPERSCRIPT_TM_ATTACHED identifies an adjustment; NO_SEPARATE_TM_BOX means OCR did
+not provide a separate mark box; GEOMETRY_NOT_CONFIRMED means the layout criteria
+were not met. No additional OCR calls or capture scheduling changes are introduced.

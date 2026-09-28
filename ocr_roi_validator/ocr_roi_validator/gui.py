@@ -83,6 +83,7 @@ class OCRInputRecord:
     exact: bool
     raw_ocr_text: str = ""
     spacing_evidence: dict | None = None
+    superscript_evidence: dict | None = None
 
 
 def _save_failed_roi_diagnostic(
@@ -126,6 +127,8 @@ def _save_failed_roi_diagnostic(
         metadata["language"] = ocr_input.language
         metadata["ocr_path"] = ocr_input.path_kind
         metadata["ocr_raw_output"] = ocr_input.raw_ocr_text
+        if ocr_input.superscript_evidence:
+            metadata["superscript"] = ocr_input.superscript_evidence
         if ocr_input.spacing_evidence:
             metadata["image_spacing"] = ocr_input.spacing_evidence
     elif preprocess is not None:
@@ -986,6 +989,10 @@ class OCRValidatorGUI(AutomationWorkflow, ROIPresetWorkflow):
                 self._last_ocr_input.path_kind = ("diacritic_scaled_retry"
                                                   if result.spacing_evidence["method"] == "diacritic_scaled_retry"
                                                   else "spacing_word_retry")
+        from .superscript import apply_superscript_tm
+        apply_superscript_tm(result)
+        if record_as is not None and self._last_ocr_input is not None:
+            self._last_ocr_input.superscript_evidence = result.superscript_evidence
         result.text = normalize_ocr_ui_text(result.text, expected_text)
         return result
 
@@ -1055,6 +1062,10 @@ class OCRValidatorGUI(AutomationWorkflow, ROIPresetWorkflow):
                             recognize=lambda piece: self.engine.run(piece, self.language_var.get()))
         if self._last_ocr_input is not None:
             self._last_ocr_input.spacing_evidence = context_ocr.spacing_evidence
+        from .superscript import apply_superscript_tm
+        apply_superscript_tm(context_ocr)
+        if self._last_ocr_input is not None:
+            self._last_ocr_input.superscript_evidence = context_ocr.superscript_evidence
         context_ocr.text = normalize_ocr_ui_text(context_ocr.text, expected_text)
         return context_ocr
 

@@ -127,9 +127,15 @@ class ScrollTextAccumulator:
         text = normalize_scroll_text(text)
         if self.evidence is not None:
             self.evidence.last_aligned = False
+            self.evidence.last_start = None
+            self.evidence.last_reason = "NOT_EVALUATED"
         if len(text) < self.min_length:
+            if self.evidence is not None:
+                self.evidence.last_reason = "EMPTY_OR_TOO_SHORT"
             return False
         if score < self.min_score:
+            if self.evidence is not None:
+                self.evidence.last_reason = "LOW_CONFIDENCE"
             return False
 
         self.accepted_count += 1

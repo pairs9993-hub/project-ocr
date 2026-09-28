@@ -20,6 +20,7 @@ class OCRRunResult:
     boxes: List["OCRBox"]
     raw_text: str = ""
     spacing_evidence: dict | None = None
+    superscript_evidence: dict | None = None
 
 
 @dataclass
