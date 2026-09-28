@@ -214,13 +214,19 @@ class AutomationDialog:
             if not windows:
                 raise ValueError("실행한 Vesta 창을 찾을 수 없습니다.")
             foreground(windows[0])
-            messagebox.showinfo("화면 기준 등록", "기존 프리셋을 그릴 때 선택했던 GUI 화면 전체를 같은 경계로 선택하세요.\n"
+            messagebox.showinfo("화면 기준 등록", "다음 미리보기 창에서 기존 프리셋의 GUI 화면 전체를 같은 경계로 드래그하세요.\n"
                                 "ROI 자체가 아니라 ROI의 기준 화면입니다. 제목 표시줄/도구 모음은 제외하세요.", parent=self.window)
             self.window.withdraw()
             self.gui.root.withdraw()
             self.window.update_idletasks()
             from .gui import ScreenAreaSelector
-            selector = ScreenAreaSelector(self.gui.root)
+            # Show only the launched Vesta's visible client bounds in a preview.
+            windows = client_windows(self.session.pid)
+            if not windows:
+                raise ValueError("실행한 Vesta 창을 찾을 수 없습니다.")
+            bounds = (min(w.rect[0] for w in windows), min(w.rect[1] for w in windows),
+                      max(w.rect[2] for w in windows), max(w.rect[3] for w in windows))
+            selector = ScreenAreaSelector(self.gui.root, capture_rect=bounds)
             selector.grab_set()
             self.gui.root.wait_window(selector)
             if selector.result_rect is None:

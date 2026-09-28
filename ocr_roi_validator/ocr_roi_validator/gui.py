@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ctypes
 import hashlib
 import json
 import sys
@@ -146,55 +145,64 @@ def _save_failed_roi_diagnostic(
     return run_dir
 
 
-class ScreenAreaSelector(tk.Toplevel):
-    def __init__(self, parent: tk.Tk):
-        super().__init__(parent)
-        self.overrideredirect(True)
-        self.attributes("-topmost", True)
-
-        with mss.mss() as sct:
-            self.monitor = dict(sct.monitors[0])
-            shot = sct.grab(self.monitor)
-
-        self.full_image = Image.frombytes("RGB", shot.size, shot.rgb)
-        self.photo = ImageTk.PhotoImage(self.full_image)
-
-        self.canvas = tk.Canvas(self, width=self.full_image.width, height=self.full_image.height, cursor="cross")
-        self.canvas.pack(fill=tk.BOTH, expand=True)
-        self.canvas.create_image(0, 0, anchor=tk.NW, image=self.photo)
-        self.canvas.create_text(
-            18,
-            18,
-            anchor=tk.NW,
-            text="Drag to select capture area   |   Esc to cancel",
-            fill="white",
-            font=("Segoe UI", 14, "bold"),
+def _preview_selection_rect(monitor, preview_size, start, end):
+    """Map preview pixels to physical desktop pixels, including negative origins."""
+    width, height = preview_size
+    def source_point(point):
+        return (
+            round(max(0, min(width, point[0])) * monitor["width"] / width),
+            round(max(0, min(height, point[1])) * monitor["height"] / height),
         )
+    return _absolute_selection_rect(monitor, source_point(start), source_point(end))
 
-        self.start_x = 0
-        self.start_y = 0
-        self.rect_id = None
+
+class ScreenAreaSelector(tk.Toplevel):
+    def __init__(self, parent: tk.Tk, capture_rect: Rect | None = None):
+        super().__init__(parent)
+        # Capture before showing any selector window; never stretch a desktop
+        # screenshot over monitors with different origins or DPI scales.
+        self.withdraw()
         self.result_rect: Rect | None = None
-
-        self.canvas.bind("<ButtonPress-1>", self._on_press)
-        self.canvas.bind("<B1-Motion>", self._on_drag)
-        self.canvas.bind("<ButtonRelease-1>", self._on_release)
-        self.bind("<Escape>", lambda _e: self.destroy())
-        self._position_over_virtual_desktop()
-        self.focus_force()
-
-    def _position_over_virtual_desktop(self):
-        left = self.monitor["left"]
-        top = self.monitor["top"]
-        width = self.monitor["width"]
-        height = self.monitor["height"]
-        self.geometry(f"{width}x{height}+0+0")
-        self.update_idletasks()
-        if sys.platform == "win32":
-            hwnd = ctypes.windll.user32.GetParent(self.winfo_id()) or self.winfo_id()
-            ctypes.windll.user32.SetWindowPos(hwnd, -1, left, top, width, height, 0x0040)
-        else:
-            self.geometry(f"{width}x{height}{left:+d}{top:+d}")
+        try:
+            with mss.mss() as sct:
+                if capture_rect is None:
+                    self.monitor = dict(sct.monitors[0])
+                else:
+                    left, top, right, bottom = capture_rect
+                    self.monitor = {"left": left, "top": top,
+                                    "width": right-left, "height": bottom-top}
+                shot = sct.grab(self.monitor)
+            self.full_image = Image.frombytes("RGB", shot.size, shot.rgb)
+            available_width = max(1, min(1200, self.winfo_screenwidth()-100))
+            available_height = max(1, min(800, self.winfo_screenheight()-200))
+            scale = min(1.0, available_width / self.full_image.width,
+                        available_height / self.full_image.height)
+            self.preview_size = (max(1, round(self.full_image.width * scale)),
+                                 max(1, round(self.full_image.height * scale)))
+            preview = self.full_image.resize(self.preview_size, Image.Resampling.LANCZOS)
+            self.photo = ImageTk.PhotoImage(preview, master=self)
+            self.title("화면 기준 선택 — 미리보기에서 드래그")
+            self.resizable(False, False)
+            ttk.Label(self, text="아래 미리보기에서 기준 화면 전체를 드래그하세요. Esc: 취소",
+                      padding=8).pack(anchor=tk.W)
+            self.canvas = tk.Canvas(self, width=self.preview_size[0], height=self.preview_size[1],
+                                    highlightthickness=0, borderwidth=0, cursor="cross")
+            self.canvas.pack()
+            self.canvas.create_image(0, 0, anchor=tk.NW, image=self.photo)
+            self.start_x = self.start_y = 0
+            self.rect_id = None
+            self.canvas.bind("<ButtonPress-1>", self._on_press)
+            self.canvas.bind("<B1-Motion>", self._on_drag)
+            self.canvas.bind("<ButtonRelease-1>", self._on_release)
+            self.bind("<Escape>", lambda _e: self.destroy())
+            self.protocol("WM_DELETE_WINDOW", self.destroy)
+            self.geometry("+30+30")
+            self.deiconify()
+            self.lift()
+            self.focus_force()
+        except Exception:
+            self.destroy()
+            raise
 
     def _on_press(self, event):
         self.start_x = event.x
@@ -208,10 +216,9 @@ class ScreenAreaSelector(tk.Toplevel):
             self.canvas.coords(self.rect_id, self.start_x, self.start_y, event.x, event.y)
 
     def _on_release(self, event):
-        self.result_rect = _absolute_selection_rect(
-            self.monitor,
-            (self.start_x, self.start_y),
-            (event.x, event.y),
+        self.result_rect = _preview_selection_rect(
+            self.monitor, self.preview_size,
+            (self.start_x, self.start_y), (event.x, event.y),
         )
         self.destroy()
 
