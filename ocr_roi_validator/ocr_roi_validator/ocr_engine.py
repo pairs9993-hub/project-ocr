@@ -18,6 +18,8 @@ class OCRRunResult:
     mean_score: float
     n_boxes: int
     boxes: List["OCRBox"]
+    raw_text: str = ""
+    spacing_evidence: dict | None = None
 
 
 @dataclass

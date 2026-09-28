@@ -110,6 +110,7 @@ def verify_case(processor, session, case, preset, references, duration, fps, sto
     trackers = {i: CycleTracker(r.expected) for i, r in rois.items()}
     records, text_map, scores, completed = {}, {}, {}, {}
     observed = {i: [] for i in rois}
+    spacing_evidence = {}
     started_at = time.monotonic()
     deadline = started_at + min(30.0, case.max_observation, duration)
     reason = "TIMEOUT"
@@ -136,8 +137,13 @@ def verify_case(processor, session, case, preset, references, duration, fps, sto
                     if processor._last_ocr_input is not None:
                         records[roi_id] = processor._last_ocr_input
                     text_map[roi_id] = ocr.text
-                    if not observed[roi_id] or observed[roi_id][-1] != ocr.text:
-                        observed[roi_id].append(ocr.text)
+                    raw = getattr(ocr, "raw_text", None)
+                    raw = raw if isinstance(raw, str) and raw else ocr.text
+                    if not observed[roi_id] or observed[roi_id][-1] != raw:
+                        observed[roi_id].append(raw)
+                    spacing = getattr(ocr, "spacing_evidence", None)
+                    if isinstance(spacing, dict):
+                        spacing_evidence[roi_id] = spacing
                     trackers[roi_id].add(ocr.text)
                     comparison = compare_text(roi.expected, ocr.text, mode=processor.compare_mode_var.get(),
                                               similarity_threshold=float(processor.similarity_threshold_var.get()))
@@ -186,6 +192,9 @@ def verify_case(processor, session, case, preset, references, duration, fps, sto
                    "ambiguous_observations": trackers[roi_id].ambiguous,
                    "mode": case.roi_modes.get(roi_id, case.verification_mode),
                    "required_cycles": case.required_cycles, "completed_at_sec": completed.get(roi_id)}
+        details["raw_observations"] = observed[roi_id]
+        if roi_id in spacing_evidence:
+            details["image_spacing"] = spacing_evidence[roi_id]
         if scrolling:
             acc = accumulators[roi_id]
             if isinstance(acc, VerticalListAccumulator):

@@ -41,7 +41,7 @@ def write_excel_report(path: Path, report):
     summary.append(["TC 번호", "시트", "Excel 행", "TC 제목", "정답지 이름", "사용 명령어", "ROI preset", "상태", "사유", "관찰 시간(초)", "합부(PASS/FAIL)"])
     detail = book.create_sheet("ROI Results")
     detail.append(["TC 번호", "시트", "Excel 행", "TC 제목", "정답지 이름", "사용 명령어", "ROI preset",
-                   "ROI ID", "정답 텍스트", "검출 텍스트", "상태", "사유", "점수", "완료 주기", "검증 모드", "합부(PASS/FAIL)", "문자 관측률", "공백 판정", "프레임별 OCR 원문"])
+                   "ROI ID", "정답 텍스트", "검출 텍스트", "상태", "사유", "점수", "완료 주기", "검증 모드", "합부(PASS/FAIL)", "문자 관측률", "공백 판정", "프레임별 OCR 원문", "이미지 공백 판정"])
     for tc in report["results"]:
         common = [tc.get("tc_number", str(tc["row"])), tc["sheet"], tc["row"], tc["title"], tc.get("image", ""),
                   "\n".join(tc.get("commands", [])), tc["preset"]]
@@ -52,7 +52,8 @@ def write_excel_report(path: Path, report):
                 roi.get("status", "PASS" if roi.get("passed") else "FAIL"), roi.get("reason", ""), roi.get("score"),
                 evidence.get("completed_cycles"), evidence.get("mode", ""), verdict(roi.get("status", "PASS" if roi.get("passed") else "FAIL")),
                 evidence.get("character_coverage"), evidence.get("spacing_status", ""),
-                "\n--- frame ---\n".join(evidence.get("raw_observations", []))])
+                "\n--- frame ---\n".join(evidence.get("raw_observations", [])),
+                evidence.get("image_spacing", {}).get("status", "")])
     info = book.create_sheet("Run Info")
     info.append(["항목", "값"])
     for key in ("state", "started_at", "ended_at", "tc", "zip", "error"):

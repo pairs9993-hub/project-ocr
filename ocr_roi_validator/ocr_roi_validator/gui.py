@@ -81,6 +81,7 @@ class OCRInputRecord:
     language: str
     exact: bool
     raw_ocr_text: str = ""
+    spacing_evidence: dict | None = None
 
 
 def _save_failed_roi_diagnostic(
@@ -124,6 +125,8 @@ def _save_failed_roi_diagnostic(
         metadata["language"] = ocr_input.language
         metadata["ocr_path"] = ocr_input.path_kind
         metadata["ocr_raw_output"] = ocr_input.raw_ocr_text
+        if ocr_input.spacing_evidence:
+            metadata["image_spacing"] = ocr_input.spacing_evidence
     elif preprocess is not None:
         saved_input = crop_roi(source_image, roi.rect, preprocess)
         metadata["ocr_input_fidelity"] = FIDELITY_RECONSTRUCTED
@@ -928,6 +931,10 @@ class OCRValidatorGUI(AutomationWorkflow, ROIPresetWorkflow):
             roi = self.rois[roi_id]
             ocr = self._run_roi_ocr(frame_image, roi.rect, roi.expected)
             text_map[roi_id] = ocr.text
+            spacing = getattr(ocr, "spacing_evidence", None)
+            if isinstance(spacing, dict):
+                self._append_live_log(f"ROI{roi_id} IMAGE_SPACING={spacing['status']} "
+                                      f"RAW={spacing['raw_text']!r} RESULT={ocr.text!r}")
             if self._last_ocr_input is not None:
                 self._ocr_inputs[roi_id] = self._last_ocr_input
 
@@ -962,6 +969,10 @@ class OCRValidatorGUI(AutomationWorkflow, ROIPresetWorkflow):
         if record_as is not None and self._last_ocr_input is not None:
             # Raw recognizer output, before the expected-aware UI normalization.
             self._last_ocr_input.raw_ocr_text = result.text
+        from .image_spacing import apply_image_spacing
+        apply_image_spacing(image, result, expected_text)
+        if record_as is not None and self._last_ocr_input is not None:
+            self._last_ocr_input.spacing_evidence = result.spacing_evidence
         result.text = normalize_ocr_ui_text(result.text, expected_text)
         return result
 
@@ -1022,10 +1033,15 @@ class OCRValidatorGUI(AutomationWorkflow, ROIPresetWorkflow):
             return self._run_engine(direct_crop, expected_text, record_as="context_fallback")
 
         text, mean_score = self.engine.text_from_boxes(filtered)
-        context_ocr.text = normalize_ocr_ui_text(text, expected_text)
+        context_ocr.text = text
         context_ocr.mean_score = mean_score
         context_ocr.n_boxes = len(filtered)
         context_ocr.boxes = filtered
+        from .image_spacing import apply_image_spacing
+        apply_image_spacing(context_crop, context_ocr, expected_text)
+        if self._last_ocr_input is not None:
+            self._last_ocr_input.spacing_evidence = context_ocr.spacing_evidence
+        context_ocr.text = normalize_ocr_ui_text(context_ocr.text, expected_text)
         return context_ocr
 
     def _apply_live_frame(self, frame_image: Image.Image, text_map: dict[int, str], log_active: bool = False):
