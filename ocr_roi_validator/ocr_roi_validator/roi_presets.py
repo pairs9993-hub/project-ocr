@@ -11,6 +11,15 @@ def validate_library(data: dict) -> dict:
     presets = data.get("presets")
     if not isinstance(presets, dict):
         raise ValueError("ROI library must contain a presets object.")
+    if "shared_capture" in data:
+        shared = data["shared_capture"]
+        if not isinstance(shared, dict):
+            raise ValueError("Invalid shared capture reference.")
+        size = shared.get("image_size")
+        if not isinstance(size, list) or len(size) != 2 or any(type(v) is not int or v <= 0 for v in size):
+            raise ValueError("Invalid shared capture image_size.")
+        from .window_anchor import validate_anchor
+        validate_anchor(shared.get("capture_anchor"))
     for name, preset in presets.items():
         if not isinstance(name, str) or not name.strip() or name != name.strip():
             raise ValueError("Preset names must be nonempty without surrounding spaces.")
@@ -84,3 +93,21 @@ def excel_references(rows: list[tuple], column: int) -> list[tuple[int, str]]:
     """First row is the header; retain original Excel row numbers."""
     return [(number, str(row[column]).strip() if column < len(row) and row[column] is not None else "")
             for number, row in enumerate(rows[1:], start=2)]
+
+
+def automation_preset(library: dict, name: str) -> dict:
+    """Resolve a shared screen without modifying stored per-preset geometry."""
+    from copy import deepcopy
+    preset = deepcopy(library["presets"][name])
+    shared = library.get("shared_capture")
+    if shared and shared["image_size"] == preset["image_size"]:
+        preset["capture_anchor"] = deepcopy(shared["capture_anchor"])
+    return preset
+
+
+def with_shared_capture(library: dict, name: str, anchor: dict) -> dict:
+    from copy import deepcopy
+    updated = deepcopy(library)
+    updated["shared_capture"] = {"image_size": list(library["presets"][name]["image_size"]),
+                                 "capture_anchor": deepcopy(anchor)}
+    return validate_library(updated)

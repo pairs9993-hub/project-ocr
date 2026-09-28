@@ -15,7 +15,7 @@ from .automation import Cancelled, VestaSession, check_cancel, load_cases, numbe
 from .automation_ocr import prepare_rois, snapshot_ocr, validate_cases, verify_case
 from .automation_report import initial_result, write_excel_report
 from .isolated_ocr import IsolatedOCR
-from .roi_presets import save_library
+from .roi_presets import save_library, automation_preset, with_shared_capture
 from .window_anchor import client_windows, foreground, make_anchor, mapped_rect, selection_window
 
 
@@ -80,7 +80,7 @@ class AutomationDialog:
             if key in ("zip", "excel", "references", "lite"):
                 ttk.Button(settings, text="찾기…", command=lambda k=key: self.browse(k)).grid(row=row, column=2)
         self.settings = settings
-        ttk.Label(self.window, text="기존 프리셋: ① Vesta 실행 → ② 프리셋 선택 / 화면 기준 등록 (최초 1회) → ③ 검증 시작\n"
+        ttk.Label(self.window, text="기존 프리셋: ① Vesta 실행 → ② 대표 프리셋 선택 / 공통 화면 기준 등록 (최초 1회) → ③ 검증 시작\n"
                   "정답: Expected_Text 셀의 [ROI1] 블록 / Expected_1, Expected_2… 열 / Image. 알집 ZIP 지원 (.alz 제외).\n"
                   "다른 창으로 Vesta를 가리지 마세요. 창 이동/DPI 비례 확대는 지원, GUI 레이아웃 변경은 재등록이 필요합니다.",
                   wraplength=950).pack(anchor="w", padx=16, pady=4)
@@ -90,10 +90,10 @@ class AutomationDialog:
         names = sorted(gui.preset_library["presets"])
         if self.preset_name.get() not in names and names:
             self.preset_name.set(names[0])
-        ttk.Label(calibration, text="기준 등록 프리셋").pack(side=tk.LEFT, padx=4)
+        ttk.Label(calibration, text="대표 프리셋").pack(side=tk.LEFT, padx=4)
         self.preset_box = ttk.Combobox(calibration, textvariable=self.preset_name, values=names, state="readonly", width=24)
         self.preset_box.pack(side=tk.LEFT, padx=4)
-        self.calibrate_button = ttk.Button(calibration, text="화면 기준 등록", command=self.calibrate)
+        self.calibrate_button = ttk.Button(calibration, text="공통 화면 기준 등록", command=self.calibrate)
         self.calibrate_button.pack(side=tk.LEFT, padx=4)
         self.state = tk.StringVar(value="Ready — ZIP/TC를 첨부하세요. 첨부한 Vesta 실행 파일은 신뢰할 수 있는 파일이어야 합니다.")
         ttk.Label(self.window, textvariable=self.state, wraplength=950).pack(fill=tk.X, padx=16, pady=8)
@@ -241,13 +241,17 @@ class AutomationDialog:
                 preview = self.session.frame(preview_preset, capture)
             self.show_preview(name, preview, preset)
             self.window.deiconify()
-            if not messagebox.askyesno("화면 기준 저장", "뒤의 메인 창에서 ROI 위치를 확인하세요. 이 기준을 프리셋에 저장할까요?", parent=self.window):
+            compatible = [key for key, value in self.gui.preset_library["presets"].items()
+                          if value["image_size"] == preset["image_size"]]
+            if not messagebox.askyesno("공통 화면 기준 저장",
+                    f"뒤의 메인 창에서 ROI 위치를 확인하세요.\n같은 기준 화면 크기의 프리셋 {len(compatible)}개와 이후 추가하는 프리셋에 공통 적용합니다.\n"
+                    "각 프리셋은 같은 화면 경계를 기준으로 작성되어 있어야 합니다. 기존 개별 기준보다 공통 기준을 우선 사용합니다. 저장할까요?",
+                    parent=self.window):
                 return
-            updated = copy.deepcopy(self.gui.preset_library)
-            updated["presets"][name]["capture_anchor"] = anchor
+            updated = with_shared_capture(self.gui.preset_library, name, anchor)
             save_library(self.gui.preset_path, updated)
             self.gui.preset_library = updated
-            self.log_line(f"{name}: 창 내부 상대 좌표 저장 완료. JSON 내보내기로 다른 PC에서도 재사용할 수 있습니다.")
+            self.log_line(f"공통 기준 저장 완료: {len(compatible)}개 프리셋에 적용 ({preset['image_size']}). JSON 내보내기로 공유할 수 있습니다.")
         except Exception as exc:
             messagebox.showerror("화면 기준 등록", str(exc), parent=self.window)
         finally:
@@ -330,7 +334,7 @@ class AutomationDialog:
                 for i, case in enumerate(resolved_cases):
                     check_cancel(self.stop)
                     self.events.put(("row", (i, "RUNNING")))
-                    preset = library["presets"][case.preset]
+                    preset = automation_preset(library, case.preset)
                     entry = report["results"][i]
                     entry["status"] = "RUNNING"
                     try:

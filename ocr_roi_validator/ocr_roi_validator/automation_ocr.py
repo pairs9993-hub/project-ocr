@@ -81,11 +81,13 @@ def prepare_rois(processor, case, preset, references: Path, stop=None):
 
 def validate_cases(cases, library, references: Path, require_anchors=True):
     from .window_anchor import validate_anchor
+    from .roi_presets import automation_preset
     for case in cases:
         prefix = f"{case.sheet}!{case.row} ({case.preset})"
         preset = library["presets"].get(case.preset)
         if preset is None:
             raise ValueError(f"{prefix}: unknown ROI preset.")
+        preset = automation_preset(library, case.preset)
         validate_expected_ids(case, preset)
         if require_anchors:
             if "capture_anchor" not in preset:

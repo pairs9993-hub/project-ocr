@@ -68,7 +68,7 @@ class ROIPresetWorkflow:
         if "capture_anchor" in previous and previous.get("image_size") == preset["image_size"]:
             if messagebox.askyesno("ROI preset", "Keep this preset's registered Vesta screen reference?\nChoose No if this is a different source screen."):
                 preset["capture_anchor"] = previous["capture_anchor"]
-        updated = {"version": 1, "presets": {**self.preset_library["presets"], name: preset}}
+        updated = {**self.preset_library, "presets": {**self.preset_library["presets"], name: preset}}
         try:
             save_library(self.preset_path, updated)
         except (OSError, ValueError) as exc:
@@ -116,9 +116,13 @@ class ROIPresetWorkflow:
         try:
             incoming = load_library(Path(path))
             duplicates = sorted(self.preset_library["presets"].keys() & incoming["presets"].keys())
+            shared_conflict = ("shared_capture" in incoming and "shared_capture" in self.preset_library
+                               and incoming["shared_capture"] != self.preset_library["shared_capture"])
+            if shared_conflict:
+                duplicates.append("[shared screen reference]")
             if duplicates and not messagebox.askyesno("Import ROI library", "Replace existing presets?\n" + ", ".join(duplicates)):
                 return
-            updated = {"version": 1, "presets": {**self.preset_library["presets"], **incoming["presets"]}}
+            updated = {**self.preset_library, **incoming, "presets": {**self.preset_library["presets"], **incoming["presets"]}}
             save_library(self.preset_path, updated)
             self.preset_library = updated
             self._refresh_preset_names()

@@ -289,3 +289,20 @@ Manual check: compare Run Once and Start OCR with both scrolling toggles OFF,
 expected `Temp. Agua fría`, and exact comparison. If OCR still reads `fria`, it
 must remain visible and FAIL. Test `Centrifugado Baja` and `Suciedad Pesado` too.
 Then enable horizontal scrolling and verify scrolling text still accumulates.
+
+
+### Common screen reference for multiple ROI presets
+
+In automation, select one representative preset, launch Vesta, then click
+`공통 화면 기준 등록`. Select the complete GUI screen boundaries used when drawing
+its ROIs and confirm the preview. All presets with the same `image_size`, including
+ones saved later, use this shared reference. Their ROI coordinates and expected
+text remain independent. They must have been drawn relative to the same screen
+boundaries; equal dimensions alone do not establish that the layouts match.
+
+The JSON library stores one `shared_capture` object. It takes precedence over old
+individual anchors for matching sizes; individual anchors remain saved. Presets
+with different sizes still use their own anchors and otherwise require registration.
+Export JSON and Import JSON carry the common reference. Importing an older library
+without a common reference preserves the current one; replacing a different shared
+reference requires confirmation. Use the updated program on the receiving PC.
