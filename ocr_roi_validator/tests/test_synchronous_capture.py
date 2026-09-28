@@ -47,10 +47,11 @@ class SynchronousCaptureTests(unittest.TestCase):
                 self.assertEqual(timing['raw_text'], 'Wrong')
             with Image.open(Path(folder)/'out'/'first_ocr_frame.png') as original:
                 self.assertEqual(original.getpixel((100,150)), (1,40,60))
-            with Image.open(report['representative_image']) as representative:
-                self.assertEqual(representative.getpixel((100,150)), (1,40,60))
-                self.assertEqual(representative.getpixel((10,20)), (255,48,48))
-                self.assertEqual(representative.getpixel((10,70)), (255,48,48))
+            for index, roi in enumerate(report['rois']):
+                with Image.open(roi['representative_image']) as representative:
+                    self.assertEqual(representative.getpixel((100,150)), (1,40,60))
+                    self.assertEqual(representative.getpixel((10,20 if index == 0 else 70)), (255,48,48))
+                    self.assertEqual(representative.getpixel((10,70 if index == 0 else 20)), (1,40,60))
             tc = dict(report, sheet='tc', row=2, title='test', preset='p')
             path = Path(folder)/'report.xlsx'
             write_excel_report(path, {'results': [tc]})
@@ -66,6 +67,11 @@ class SynchronousCaptureTests(unittest.TestCase):
             self.assertEqual(len(sheet._images), 2)
             self.assertEqual(sheet._images[0].anchor._from.col, 6)
             self.assertEqual(sheet._images[0].anchor._from.row, 1)
+            from io import BytesIO
+            for index, image in enumerate(sheet._images):
+                with Image.open(BytesIO(image._data())) as embedded:
+                    self.assertEqual(embedded.getpixel((10,20 if index == 0 else 70)), (255,48,48))
+                    self.assertEqual(embedded.getpixel((10,70 if index == 0 else 20)), (1,40,60))
             self.assertGreaterEqual(sheet.row_dimensions[2].height, 240*.75)
             for name in ('TC Summary','ROI Results','OCR Timing'):
                 headers = [c.value for c in book[name][1]]

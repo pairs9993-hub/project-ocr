@@ -500,3 +500,13 @@ pixels to respect Excel's 409-point row height limit. Full-resolution PNG files
 remain available in the report artifacts. Source pixels and OCR processing are not
 modified by ROI annotations. Cancellation/error after a first OCR attempt still
 retains its representative frame when artifact saving succeeds.
+
+
+### Representative image per ROI row
+
+Each ROI Results row now embeds `representative_roi_<ID>.png`: a fresh copy of the
+same first-OCR TC frame with only that row's ROI rectangle and number. Other ROI
+boxes are not drawn. The TC-level representative_image points to the unannotated
+first_ocr_frame.png. Row image sizing, original-frame selection, and embedded image
+portability are unchanged. Older reports without a per-ROI image key can still
+export using their existing TC-level image.

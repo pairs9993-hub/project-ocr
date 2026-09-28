@@ -224,6 +224,7 @@ def verify_case(processor, session, case, preset, references, duration, fps, sto
         reason = f"ERROR: {exc}"
     artifact_error = None
     representative_image = None
+    roi_images = {}
     try:
         output.mkdir(parents=True, exist_ok=True)
         if frame is not None:
@@ -231,15 +232,16 @@ def verify_case(processor, session, case, preset, references, duration, fps, sto
         if first_ocr_frame is not None:
             from PIL import ImageDraw
             first_ocr_frame.save(output / "first_ocr_frame.png")
-            annotated = first_ocr_frame.convert("RGB")
-            draw = ImageDraw.Draw(annotated)
+            representative_image = str((output / "first_ocr_frame.png").resolve())
             for roi_id, roi in rois.items():
+                annotated = first_ocr_frame.convert("RGB")
+                draw = ImageDraw.Draw(annotated)
                 x1, y1, x2, y2 = roi.rect
                 draw.rectangle((x1, y1, x2-1, y2-1), outline="#ff3030", width=2)
                 draw.text((x1+3, max(0, y1-13)), f"ROI {roi_id}", fill="#ff3030")
-            image_path = output / "representative.png"
-            annotated.save(image_path)
-            representative_image = str(image_path.resolve())
+                image_path = output / f"representative_roi_{roi_id}.png"
+                annotated.save(image_path)
+                roi_images[roi_id] = str(image_path.resolve())
     except OSError as exc:
         artifact_error = str(exc)
     results = []
@@ -276,7 +278,8 @@ def verify_case(processor, session, case, preset, references, duration, fps, sto
         roi.passed = roi_id in completed
         status = "PASS" if roi.passed else "CANCELLED" if reason == "CANCELLED" else "ERROR" if reason.startswith("ERROR") else "FAIL_TIMEOUT"
         result = {**asdict(roi), "score": scores.get(roi_id, 0), "details": details,
-                  "status": status, "reason": "VERIFIED" if roi.passed else reason}
+                  "status": status, "reason": "VERIFIED" if roi.passed else reason,
+                  "representative_image": roi_images.get(roi_id)}
         if not roi.passed and frame is not None:
             try:
                 diagnostic = _save_failed_roi_diagnostic(frame, roi, output_root=output / "failures",

@@ -111,7 +111,7 @@ def write_excel_report(path: Path, report):
                 evidence.get("ocr_calls"), evidence.get("ocr_seconds"),
                 " / ".join(f"{item['position']}:{item['expected']}" for item in evidence.get("missing_characters", [])),
                 evidence.get("capture", {}).get("superseded_frames")])
-            image_rows.append((detail.max_row, tc.get("representative_image")))
+            image_rows.append((detail.max_row, roi.get("representative_image", tc.get("representative_image"))))
             source = evidence.get("display_source", "raw_observations")
             if source in ("assembled", "evaluated_observations") or any(roi.get("actual") == t.get("evaluated_text")
                                                for t in evidence.get("frame_timings", [])):
