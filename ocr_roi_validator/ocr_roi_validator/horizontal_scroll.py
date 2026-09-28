@@ -5,7 +5,7 @@ import re
 from .compare import compare_text, normalize_ui_text
 
 
-def compact_observation(text):
+def compact_observation(text, group_trademark=False):
     text = re.sub(r"\s+", " ", normalize_ui_text(text)).strip()
     chars, gaps = [], {}
     space = False
@@ -17,6 +17,20 @@ def compact_observation(text):
             gaps[len(chars)] = space
         chars.append(char)
         space = False
+    if group_trademark:
+        grouped, grouped_gaps = [], {}
+        index = 0
+        while index < len(chars):
+            if grouped:
+                grouped_gaps[len(grouped)] = gaps[index]
+            if (index+1 < len(chars) and chars[index:index+2] == ['T', 'M']
+                    and not gaps[index+1]):
+                grouped.append('TM')  # Actual two-letter observation, not the expected glyph.
+                index += 2
+            else:
+                grouped.append(chars[index])
+                index += 1
+        return grouped, grouped_gaps
     return chars, gaps
 
 
@@ -50,8 +64,9 @@ def substitution_position(tokens, observed):
 class HorizontalScrollEvidence:
     def __init__(self, expected, compare_mode="exact", threshold=0.9):
         self.expected = re.sub(r"\s+", " ", normalize_ui_text(expected)).strip()
-        self.chars, self.expected_gaps = compact_observation(self.expected)
-        self.tokens = tuple(c.casefold() for c in self.chars)
+        self.group_trademark = "\u2122" in self.expected
+        self.chars, self.expected_gaps = compact_observation(self.expected, self.group_trademark)
+        self.tokens = tuple(self._placement_token(c) for c in self.chars)
         self.compare_mode, self.threshold = compare_mode, threshold
         self.letters = [Counter() for _ in self.chars]
         self.gaps = [Counter() for _ in self.chars]
@@ -62,8 +77,14 @@ class HorizontalScrollEvidence:
         self.last_substitutions = []
         self.aligned_frames = self.ambiguous_frames = self.unmatched_frames = 0
 
+    def _placement_token(self, char):
+        # Equivalence is for positioning only. Final comparison keeps actual TM/™.
+        if self.group_trademark and char in ("TM", "\u2122"):
+            return "\u2122"
+        return char.casefold()
+
     def add(self, text):
-        chars, gaps = compact_observation(text)
+        chars, gaps = compact_observation(text, self.group_trademark)
         self.last_aligned = False
         self.last_reason = "NOT_EVALUATED"
         self.last_start = None
@@ -73,7 +94,7 @@ class HorizontalScrollEvidence:
             self.last_reason = "EMPTY_OR_LENGTH_OUT_OF_RANGE"
             self.unmatched_frames += 1
             return
-        observed = tuple(c.casefold() for c in chars)
+        observed = tuple(self._placement_token(c) for c in chars)
         doubled = self.tokens + self.tokens
         starts = [i for i in range(n) if doubled[i:i+length] == observed]
         whole_text = re.sub(r"\s+", " ", normalize_ui_text(text)).strip()

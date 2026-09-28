@@ -384,3 +384,16 @@ appear in a complete assembly and still fail against `Código` in exact mode.
 Such a frame cannot confirm a cached automation PASS. Insertions, deletions, short
 fragments, and extensive errors are outside this fallback's scope. Capture timing,
 OCR calls, and the separate raw-text display are unchanged.
+
+
+### Trademark expansion during scroll positioning
+
+When the expected text contains Unicode trademark sign U+2122, adjacent OCR letters
+`TM` (without whitespace between T and M) occupy one alignment unit, like the sign.
+The actual observed string remains `TM`; this prevents the M from wrapping onto
+the sentence's first letter. A preceding space remains observed spacing. This is
+placement equivalence only: exact comparison still distinguishes `TM` from the
+trademark sign. An actually observed sign remains the sign and can pass normally.
+A missing M is never supplied. Ordinary expected strings without U+2122 retain
+character-by-character alignment. Aligned start and coverage refer to alignment
+units in this case, not the expanded OCR string's character indices.

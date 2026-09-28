@@ -40,6 +40,33 @@ class HorizontalEvidenceTests(unittest.TestCase):
         self.assertEqual(evidence.coverage, 0)
         self.assertFalse(evidence.last_aligned)
 
+    def test_tm_expansion_does_not_wrap_m_onto_first_letter(self):
+        evidence = HorizontalScrollEvidence('Limpieza de boquillas ezDispense\u2122')
+        for _ in range(3):
+            evidence.add('Limpieza de boquillas ezDispense TM')
+            evidence.add('boquillas ezDispense TM')
+        self.assertEqual(evidence.assembled_text, 'Limpieza de boquillas ezDispense TM')
+        self.assertEqual(evidence.letters[0], {'L': 3})
+        self.assertEqual(evidence.last_substitutions, [])
+        self.assertEqual(evidence.last_reason, 'ALIGNED')
+        self.assertFalse(evidence.passed)
+
+    def test_actual_trademark_glyph_still_passes(self):
+        expected = 'Limpieza de boquillas ezDispense\u2122'
+        evidence = HorizontalScrollEvidence(expected)
+        evidence.add(expected)
+        evidence.add(expected)
+        self.assertEqual(evidence.assembled_text, expected)
+        self.assertTrue(evidence.passed)
+
+    def test_missing_m_is_not_filled_and_separated_t_m_not_grouped(self):
+        for text in ('boquillas ezDispenseT', 'boquillas ezDispenseT M'):
+            evidence = HorizontalScrollEvidence('Limpieza de boquillas ezDispense\u2122')
+            evidence.add(text)
+            self.assertFalse(evidence.passed)
+            if text.endswith('T'):
+                self.assertNotIn('TM', evidence.assembled_text)
+
     def test_middle_start_and_wrap_preserve_sentence_start(self):
         evidence = HorizontalScrollEvidence('Centrifugado Extra Fuerte')
         frames = ['Extra Fuerte', 'Fuerte Centri', 'Centrifugado Ex', 'gado Extra Fue']
