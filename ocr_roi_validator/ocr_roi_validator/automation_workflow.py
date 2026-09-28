@@ -67,7 +67,7 @@ class AutomationDialog:
                   ("product", "Product (sim_config 이름)", ""),
                   ("roi_column", "ROI 이름 열", "ROI"),
                   ("lite", "LITE 폴더", str(Path(__file__).resolve().parents[2] / "lite")),
-                  ("duration", "최대 ROI 관찰 시간 (≤30초)", "30"),
+                  ("duration", "화면 관찰 시간 (≤30초)", "30"),
                   ("fps", "스크롤 FPS", gui.scroll_fps_var.get())]
         for row, (key, label, default) in enumerate(fields):
             var = tk.StringVar(value=default)
@@ -82,7 +82,7 @@ class AutomationDialog:
         self.settings = settings
         ttk.Label(self.window, text="기존 프리셋: ① Vesta 실행 → ② 대표 프리셋 선택 / 공통 화면 기준 등록 (최초 1회) → ③ 검증 시작\n"
                   "정답: Expected_Text 셀의 [ROI1] 블록 / Expected_1, Expected_2… 열 / Image. 알집 ZIP 지원 (.alz 제외).\n"
-                  "다른 창으로 Vesta를 가리지 마세요. 창 이동/DPI 비례 확대는 지원, GUI 레이아웃 변경은 재등록이 필요합니다.",
+                  "관찰 후 남은 프레임 처리에 최대 30초가 추가됩니다. 다른 창으로 Vesta를 가리지 마세요. GUI 레이아웃 변경은 재등록이 필요합니다.",
                   wraplength=950).pack(anchor="w", padx=16, pady=4)
         calibration = ttk.Frame(self.window, padding=8)
         calibration.pack(fill=tk.X)

@@ -31,6 +31,27 @@ def preset(scrolling=False, direction="horizontal"):
                                           (100, 100, 420, 340))}
 
 
+class InlineCapture:
+    def __init__(self, session, preset, fps, duration, stop):
+        import time
+        self.session, self.preset, self.stop = session, preset, stop
+        self.end = time.monotonic()+duration
+        self.count = 0
+    def __enter__(self):
+        return self
+    def __exit__(self, *args):
+        pass
+    def next_frame(self, deadline):
+        import time
+        if time.monotonic() >= self.end:
+            return None
+        frame = self.session.frame(self.preset, None)
+        self.count += 1
+        return frame, time.monotonic()
+    def stats(self):
+        return {'captured_frames': self.count, 'dropped_frames': 0, 'pending_frames': 0}
+
+
 def processor(text="Hello"):
     gui = OCRValidatorGUI.__new__(OCRValidatorGUI)
     settings = {"language_var": "en_es", "compare_mode_var": "exact", "similarity_threshold_var": "0.9",
@@ -43,7 +64,9 @@ def processor(text="Hello"):
         setattr(gui, key, var)
     gui.engine = MagicMock()
     gui.engine.run.return_value = MagicMock(text=text, boxes=[object()], mean_score=0.99, n_boxes=1)
-    return snapshot_ocr(gui)
+    value = snapshot_ocr(gui)
+    value._capture_factory = InlineCapture
+    return value
 
 
 class GeometryTests(unittest.TestCase):

@@ -981,10 +981,10 @@ class OCRValidatorGUI(AutomationWorkflow, ROIPresetWorkflow):
                             recognize=lambda piece: self.engine.run(piece, language))
         if record_as is not None and self._last_ocr_input is not None:
             self._last_ocr_input.spacing_evidence = result.spacing_evidence
-            if (result.spacing_evidence or {}).get("method") in ("stable_gaps_independent_word_ocr", "diacritic_scaled_retry"):
+            if (result.spacing_evidence or {}).get("method") in ("stable_gaps_independent_word_ocr", "diacritic_scaled_retry", "independent_word_retry"):
                 self._last_ocr_input.exact = False
-                self._last_ocr_input.path_kind = ("diacritic_scaled_retry"
-                                                  if result.spacing_evidence["method"] == "diacritic_scaled_retry"
+                self._last_ocr_input.path_kind = (result.spacing_evidence["method"]
+                                                  if result.spacing_evidence["method"] in ("diacritic_scaled_retry", "independent_word_retry")
                                                   else "spacing_word_retry")
         result.text = normalize_ocr_ui_text(result.text, expected_text)
         return result

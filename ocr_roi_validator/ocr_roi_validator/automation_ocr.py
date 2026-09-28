@@ -114,26 +114,38 @@ def verify_case(processor, session, case, preset, references, duration, fps, sto
     observed = {i: [] for i in rois}
     spacing_evidence = {}
     started_at = time.monotonic()
-    deadline = started_at + min(30.0, case.max_observation, duration)
+    observation_duration = min(30.0, case.max_observation, duration)
+    from .buffered_capture import BufferedCapture
+    capture_factory = getattr(processor, "_capture_factory", BufferedCapture)
+    stream = capture_factory(session, preset, fps, observation_duration, stop)
+    # Drain already captured frames for at most another 30 seconds.
+    deadline = started_at + observation_duration + 30.0
+    processed = {i: 0 for i in rois}
+    ocr_seconds = {i: 0.0 for i in rois}
     reason = "TIMEOUT"
     frame = None
     try:
-        with mss.mss() as capture:
+        with stream:
             while time.monotonic() < deadline:
                 check_cancel(stop)
-                started = time.monotonic()
-                frame = session.frame(preset, capture)
+                item = stream.next_frame(deadline)
+                if item is None:
+                    break
+                frame, captured_at = item
                 for roi_id, roi in rois.items():
                     check_cancel(stop)
                     if roi_id in completed:
                         continue
                     if time.monotonic() >= deadline:
                         break
+                    ocr_started = time.monotonic()
                     service = getattr(processor, "_isolated_ocr", None)
                     if service is not None:
                         ocr = service.run(frame, roi.rect, roi.expected, stop, deadline)
                     else:
                         ocr = processor._run_roi_ocr(frame, roi.rect, roi.expected)
+                    processed[roi_id] += 1
+                    ocr_seconds[roi_id] += time.monotonic()-ocr_started
                     if time.monotonic() > deadline:
                         raise TimeoutError("OCR observation deadline reached")
                     if processor._last_ocr_input is not None:
@@ -156,7 +168,7 @@ def verify_case(processor, session, case, preset, references, duration, fps, sto
                             acc.add(ocr.text, ocr.mean_score)
                             eligible, score = acc.passed, acc.coverage
                         else:
-                            acc.add(ocr.text, ocr.mean_score, observed_at=time.perf_counter())
+                            acc.add(ocr.text, ocr.mean_score, observed_at=captured_at)
                             eligible, score = acc.cycle_complete, acc.coverage
                     mode = case.roi_modes.get(roi_id, case.verification_mode)
                     if mode == "cycles":
@@ -169,12 +181,12 @@ def verify_case(processor, session, case, preset, references, duration, fps, sto
                     elif scrolling and not comparison.passed:
                         from .verification_policy import normalized
                         related = related and normalized(ocr.text) in normalized(roi.expected)
-                    if confirmations[roi_id].add(eligible and related, time.monotonic()):
+                    if confirmations[roi_id].add(eligible and related, captured_at):
                         completed[roi_id] = time.monotonic()-started_at
                 if len(completed) == len(rois):
                     reason = "ALL_ROIS_PASSED"
                     break
-                stop.wait(max(0, min(deadline-time.monotonic(), 1/fps-(time.monotonic()-started))))
+
     except Cancelled:
         reason = "CANCELLED"
     except TimeoutError:
@@ -195,6 +207,9 @@ def verify_case(processor, session, case, preset, references, duration, fps, sto
                    "mode": case.roi_modes.get(roi_id, case.verification_mode),
                    "required_cycles": case.required_cycles, "completed_at_sec": completed.get(roi_id)}
         details["raw_observations"] = observed[roi_id]
+        details["capture"] = stream.stats()
+        details["ocr_calls"] = processed[roi_id]
+        details["ocr_seconds"] = round(ocr_seconds[roi_id], 3)
         if roi_id in spacing_evidence:
             details["image_spacing"] = spacing_evidence[roi_id]
         if scrolling:

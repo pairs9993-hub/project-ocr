@@ -167,6 +167,10 @@ def apply_image_spacing(image, result, expected, recognize=None):
             result.spacing_evidence = {"status": "UNCERTAIN", "reason": "DIACRITIC_MISMATCH", "raw_text": raw}
             if recognize is not None and raw.strip() and len(result.boxes) == 1:
                 retry_diacritics(image, result, recognize)
+                if result.text == raw:
+                    retry_words(image, result, expected, recognize)
+        elif recognize is not None and len(result.boxes) == 1:
+            retry_words(image, result, expected, recognize)
         return
     if len(result.boxes) != 1:
         result.spacing_evidence = {"status": "UNCERTAIN", "reason": "REQUIRES_SINGLE_TEXT_BOX", "raw_text": raw}
@@ -218,3 +222,47 @@ def retry_diacritics(image, result, recognize):
         result.mean_score = min(item['score'] for item in evidence['retry_outputs'])
         evidence.update(status="DIACRITIC_RETRY_CONFIRMED", text=result.text)
         evidence.pop('reason', None)
+
+
+def retry_words(image, result, expected, recognize):
+    """Read independently segmented words twice; never substitute expected text."""
+    from difflib import SequenceMatcher
+    from PIL import Image
+    raw = result.text
+    if image.width*image.height > 1_000_000 or '\n' in raw:
+        return
+    # Only near-complete observations justify the additional OCR cost.
+    if SequenceMatcher(None, raw, expected).ratio() < .85:
+        return
+    regions = word_regions(image)
+    if not regions:
+        return
+    outputs, words, scores = [], [], []
+    evidence = {"status": "UNCERTAIN", "reason": "WORD_RETRY_DISAGREEMENT",
+                "method": "independent_word_retry", "raw_text": raw,
+                "word_regions": regions, "retry_outputs": outputs}
+    result.spacing_evidence = evidence
+    for rect in regions:
+        piece = image.crop(rect).convert('RGB')
+        background = tuple(int(v) for v in np.median(np.asarray(piece)[0], axis=0))
+        alternatives = []
+        for scale in (1, 2):
+            variant = piece.resize((piece.width*scale, piece.height*scale), Image.Resampling.LANCZOS)
+            variant = ImageOps.expand(variant, border=max(8, variant.height//4), fill=background)
+            retry = recognize(variant)
+            text = unicodedata.normalize('NFC', retry.text).strip()
+            outputs.append({'rect': rect, 'scale': scale, 'text': text, 'score': retry.mean_score})
+            if retry.mean_score < .5 or not text or any(c.isspace() for c in text):
+                return
+            alternatives.append(text)
+            scores.append(retry.mean_score)
+        if alternatives[0] != alternatives[1]:
+            return
+        words.append(alternatives[0])
+    candidate = ' '.join(words)
+    if SequenceMatcher(None, raw, candidate).ratio() < .75:
+        return
+    result.text = candidate
+    result.mean_score = min(scores)
+    evidence.update(status="WORD_RETRY_CONFIRMED", text=candidate)
+    evidence.pop('reason', None)

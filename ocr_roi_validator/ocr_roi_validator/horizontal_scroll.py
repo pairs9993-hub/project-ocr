@@ -120,7 +120,9 @@ class HorizontalScrollEvidence:
         return compare_text(self.expected, self.assembled_text, self.compare_mode, self.threshold).passed
 
     def details(self):
-        return {"assembled_text": self.assembled_text, "character_coverage": self.coverage,
+        return {"missing_characters": [{"position": i+1, "expected": self.chars[i]}
+                                       for i, counts in enumerate(self.letters) if not counts],
+                "assembled_text": self.assembled_text, "character_coverage": self.coverage,
                 "spacing_status": self.spacing_status, "order_confirmed": self.order_valid,
                 "aligned_frames": self.aligned_frames, "ambiguous_frames": self.ambiguous_frames,
                 "unmatched_frames": self.unmatched_frames,
