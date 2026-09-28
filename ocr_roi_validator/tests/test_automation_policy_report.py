@@ -172,14 +172,33 @@ class ExcelReportTests(unittest.TestCase):
             self.assertEqual(book.sheetnames, ["TC Summary", "ROI Results", "OCR Timing", "Run Info"])
             row = list(book["ROI Results"].iter_rows(min_row=2))[0]
             self.assertEqual(row[0].value, "TC-009")
-            self.assertEqual(row[4].value, "answer.png")
-            self.assertEqual(row[5].data_type, "s")
-            self.assertEqual(row[6].value, "roi_courseop")
-            self.assertEqual(row[8].value, "=1+1\n다음 줄")
-            self.assertEqual(row[8].data_type, "s")
-            self.assertEqual(row[9].value, "=2+2\n검출")
+            self.assertEqual(row[2].value, "answer.png")
+            self.assertEqual(row[3].data_type, "s")
+            self.assertEqual(row[4].value, "roi_courseop")
+            self.assertEqual(row[7].value, "=1+1\n다음 줄")
+            self.assertEqual(row[7].data_type, "s")
+            self.assertEqual(row[8].value, "=2+2\n검출")
             book.close()
         self.assertEqual(entry, before)
+
+    def test_large_representative_image_fits_excel_row_and_is_embedded(self):
+        import zipfile
+        entry = initial_result(TestCase('tc',2,'image','p',[]),preset())
+        with tempfile.TemporaryDirectory() as directory:
+            image_path = Path(directory)/'first.png'
+            Image.new('RGB',(2000,1000),'white').save(image_path)
+            entry['representative_image'] = str(image_path)
+            path = Path(directory)/'report.xlsx'
+            write_excel_report(path,{'results':[entry]})
+            with zipfile.ZipFile(path) as archive:
+                self.assertTrue(any(name.startswith('xl/media/') for name in archive.namelist()))
+            book = load_workbook(path)
+            sheet = book['ROI Results']
+            self.assertLessEqual(sheet.row_dimensions[2].height,409)
+            self.assertLessEqual(sheet.column_dimensions['G'].width,255)
+            self.assertEqual(sheet._images[0].anchor.ext.cy,536*9525)
+            self.assertEqual(sheet._images[0].anchor.ext.cx,1072*9525)
+            book.close()
 
     def test_completion_and_cancel_export_automatically(self):
         helper = helpers.ReportWorkflowTests()
@@ -190,8 +209,8 @@ class ExcelReportTests(unittest.TestCase):
                 book = load_workbook(path)
                 self.assertEqual(book["TC Summary"].max_row, 3)
                 if error:
-                    self.assertEqual(book["ROI Results"]["K2"].value, "CANCELLED")
-                    self.assertEqual(book["ROI Results"]["K3"].value, "NOT_RUN")
+                    self.assertEqual(book["ROI Results"]["J2"].value, "CANCELLED")
+                    self.assertEqual(book["ROI Results"]["J3"].value, "NOT_RUN")
                 book.close()
 
 

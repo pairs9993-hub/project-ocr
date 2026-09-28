@@ -170,11 +170,11 @@ class SuperscriptTests(unittest.TestCase):
             path = Path(folder)/'report.xlsx'
             write_excel_report(path,report)
             book = load_workbook(path,rich_text=True)
-            for sheet, address in [('ROI Results','J2'),('OCR Timing','L2')]:
+            for sheet, address in [('ROI Results','I2'),('OCR Timing','J2')]:
                 value = book[sheet][address].value
                 self.assertEqual(str(value),'bodyZ')
                 self.assertTrue(any(isinstance(part,TextBlock) and part.font.vertAlign == 'superscript' for part in value))
-            self.assertIsInstance(book['OCR Timing']['K2'].value,str)
+            self.assertIsInstance(book['OCR Timing']['I2'].value,str)
             book.close()
 
     def test_mc_excel_uses_font_superscript_without_requiring_modifier_font(self):

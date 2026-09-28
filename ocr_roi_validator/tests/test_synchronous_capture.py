@@ -24,10 +24,11 @@ class SynchronousCaptureTests(unittest.TestCase):
         def frame(*args):
             events.append('capture')
             clock[0] += .2
-            return Image.new('RGB', (320, 240))
+            return Image.new('RGB', (320, 240), (len(events),40,60))
         def ocr(*args):
             events.append('ocr')
             clock[0] += .05
+            self.assertNotEqual(args[0].getpixel((10,20)), (255,48,48))
             return result('Wrong')
         session = MagicMock()
         session.frame.side_effect = frame
@@ -44,6 +45,12 @@ class SynchronousCaptureTests(unittest.TestCase):
                 self.assertLessEqual(timing['captured_sec'], timing['ocr_started_sec'])
                 self.assertLess(timing['ocr_started_sec'], timing['ocr_finished_sec'])
                 self.assertEqual(timing['raw_text'], 'Wrong')
+            with Image.open(Path(folder)/'out'/'first_ocr_frame.png') as original:
+                self.assertEqual(original.getpixel((100,150)), (1,40,60))
+            with Image.open(report['representative_image']) as representative:
+                self.assertEqual(representative.getpixel((100,150)), (1,40,60))
+                self.assertEqual(representative.getpixel((10,20)), (255,48,48))
+                self.assertEqual(representative.getpixel((10,70)), (255,48,48))
             tc = dict(report, sheet='tc', row=2, title='test', preset='p')
             path = Path(folder)/'report.xlsx'
             write_excel_report(path, {'results': [tc]})
@@ -52,5 +59,16 @@ class SynchronousCaptureTests(unittest.TestCase):
             self.assertTrue(book['ROI Results'].column_dimensions['V'].hidden)
             self.assertTrue(book['ROI Results'].column_dimensions['S'].hidden)
             self.assertFalse(book['ROI Results'].column_dimensions['J'].hidden)
-            self.assertIsNotNone(book['ROI Results']['J2'].comment)
+            self.assertIsNotNone(book['ROI Results']['I2'].comment)
+            sheet = book['ROI Results']
+            self.assertEqual(sheet['G1'].value, '대표 이미지')
+            self.assertEqual(sheet['H1'].value, '정답 텍스트')
+            self.assertEqual(len(sheet._images), 2)
+            self.assertEqual(sheet._images[0].anchor._from.col, 6)
+            self.assertEqual(sheet._images[0].anchor._from.row, 1)
+            self.assertGreaterEqual(sheet.row_dimensions[2].height, 240*.75)
+            for name in ('TC Summary','ROI Results','OCR Timing'):
+                headers = [c.value for c in book[name][1]]
+                for removed in ('시트','Excel 행','Sheet','Row'):
+                    self.assertNotIn(removed,headers)
             book.close()

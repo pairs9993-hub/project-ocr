@@ -478,3 +478,25 @@ observations (including confirmed superscripts), while raw_observations and Raw 
 remain unchanged for diagnosis. Capture scheduling and the geometry thresholds
 are unchanged. Exported Excel formatting is verified by reopening the workbook;
 live desktop rendering must still be checked on the target PC.
+
+
+### Representative first-OCR image in the workbook
+
+Workbook TC Summary, ROI Results, and OCR Timing omit source-sheet and Excel-row
+columns. Those identifiers remain in JSON. ROI Results inserts `대표 이미지`
+immediately before `정답 텍스트` (G=image, H=expected, I=detected).
+
+After TC command execution and the configured waiting period, the first frame
+actually passed to an OCR attempt is copied once. After verification, the unmodified
+copy is saved as first_ocr_frame.png and a representative.png copy is annotated
+with all ROI rectangles and IDs. It is never replaced by the final frame or a
+reference/expected image. Each ROI result row embeds the same TC representative
+image, so the workbook remains portable without external image files. No OCR
+attempt means no representative image; the cell explicitly reports its absence.
+
+Column width and row height fit the display image. Native size is retained for
+small images; larger images are scaled proportionally to at most 1600x536 display
+pixels to respect Excel's 409-point row height limit. Full-resolution PNG files
+remain available in the report artifacts. Source pixels and OCR processing are not
+modified by ROI annotations. Cancellation/error after a first OCR attempt still
+retains its representative frame when artifact saving succeeds.

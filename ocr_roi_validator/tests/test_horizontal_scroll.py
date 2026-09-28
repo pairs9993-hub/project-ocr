@@ -279,9 +279,9 @@ class AutomationScrollIntegrationTests(unittest.TestCase):
             book = load_workbook(path)
             try:
                 row = list(book['ROI Results'].values)[1]
-                self.assertEqual(row[9], 'SuciedadPesado')
-                self.assertEqual(row[17], 'MISMATCH')
-                self.assertEqual(row[18], 'SuciedadPesado')
+                self.assertEqual(row[8], 'SuciedadPesado')
+                self.assertEqual(row[16], 'MISMATCH')
+                self.assertEqual(row[17], 'SuciedadPesado')
             finally:
                 book.close()
 

@@ -118,6 +118,8 @@ def verify_case(processor, session, case, preset, references, duration, fps, sto
     deadline = started_at + min(30.0, case.max_observation, duration)
     reason = "TIMEOUT"
     frame = None
+    first_ocr_frame = None
+    first_ocr_captured_sec = None
     captured_count = 0
     timings = {i: [] for i in rois}
     try:
@@ -134,6 +136,9 @@ def verify_case(processor, session, case, preset, references, duration, fps, sto
                         continue
                     if time.monotonic() >= deadline:
                         break
+                    if first_ocr_frame is None:
+                        first_ocr_frame = frame.copy()
+                        first_ocr_captured_sec = round(captured_at-started_at, 4)
                     timing = {"frame": captured_count, "assembly_reason": "NOT_EVALUATED",
                               "captured_sec": round(captured_at-started_at, 4),
                               "ocr_started_sec": round(time.monotonic()-started_at, 4)}
@@ -218,10 +223,23 @@ def verify_case(processor, session, case, preset, references, duration, fps, sto
     except Exception as exc:
         reason = f"ERROR: {exc}"
     artifact_error = None
+    representative_image = None
     try:
         output.mkdir(parents=True, exist_ok=True)
         if frame is not None:
             frame.save(output / "screen.png")
+        if first_ocr_frame is not None:
+            from PIL import ImageDraw
+            first_ocr_frame.save(output / "first_ocr_frame.png")
+            annotated = first_ocr_frame.convert("RGB")
+            draw = ImageDraw.Draw(annotated)
+            for roi_id, roi in rois.items():
+                x1, y1, x2, y2 = roi.rect
+                draw.rectangle((x1, y1, x2-1, y2-1), outline="#ff3030", width=2)
+                draw.text((x1+3, max(0, y1-13)), f"ROI {roi_id}", fill="#ff3030")
+            image_path = output / "representative.png"
+            annotated.save(image_path)
+            representative_image = str(image_path.resolve())
     except OSError as exc:
         artifact_error = str(exc)
     results = []
@@ -270,4 +288,5 @@ def verify_case(processor, session, case, preset, references, duration, fps, sto
         results.append(result)
     status = "PASS" if reason == "ALL_ROIS_PASSED" else "CANCELLED" if reason == "CANCELLED" else "ERROR" if reason.startswith("ERROR") else "FAIL_TIMEOUT"
     return {"status": status, "reason": reason, "rois": results,
+            "representative_image": representative_image, "representative_captured_sec": first_ocr_captured_sec,
             "artifact_error": artifact_error, "elapsed_sec": time.monotonic()-started_at}, frame
