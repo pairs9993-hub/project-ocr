@@ -444,3 +444,14 @@ multiple competing relations; TEXT_ALREADY_ADJUSTED = geometry found but the tex
 had already changed. A single box containing `body MC` cannot expose MC's geometry.
 For testing, provide Raw text, Evaluated text, Superscript status, and Script boxes
 from the same OCR Timing row; Script relations gives further rejection reasons.
+
+
+### Small overlap between body and superscript detection boxes
+
+The adjacency rule permits detection-box overlap up to the smaller of 15% of body
+height and 25% of annotation width, while requiring the annotation to extend past
+the body's right edge. Other size, confidence, height, and ambiguity checks remain.
+This handles the observed body rect [6,6,154,37] and TM rect [151,6,175,20]:
+3 pixels overlap is below the 4.65 pixel limit. Geometry diagnostics include
+`overlap_pixels` and `overlap_limit_pixels`. Substantial/contained overlaps are
+still rejected. The tolerance is geometric and applies to any supported annotation.

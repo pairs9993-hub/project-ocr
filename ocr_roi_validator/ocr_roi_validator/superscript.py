@@ -36,10 +36,17 @@ def apply_superscripts(result):
                            gap_ratio=(mark.min_x-body.max_x)/height,
                            top_offset_ratio=(mark.min_y-body.min_y)/height,
                            bottom_raise_ratio=(body.max_y-mark.max_y)/height)
+            overlap = max(0, body.max_x-mark.min_x)
+            # Detection boxes can include padding around actual glyphs.
+            # Permit only a small overlap, bounded by both body and mark size.
+            metrics['overlap_pixels'] = overlap
+            metrics['overlap_limit_pixels'] = min(.15*height, .25*max(0, mark.max_x-mark.min_x))
             checks = dict(confidence=body.score >= .5 and mark.score >= .5,
                           smaller=0 < metrics['height_ratio'] <= .7,
                           compact=0 < metrics['width_ratio'] <= 1,
-                          adjacent=0 <= metrics['gap_ratio'] <= .35,
+                          adjacent=(metrics['gap_ratio'] <= .35
+                                    and overlap <= metrics['overlap_limit_pixels']
+                                    and mark.max_x > body.max_x),
                           upper_position=-.5 <= metrics['top_offset_ratio'] <= .25,
                           raised_baseline=metrics['bottom_raise_ratio'] >= .2)
             accepted = all(checks.values())

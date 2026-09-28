@@ -109,3 +109,25 @@ class SuperscriptTests(unittest.TestCase):
             self.assertEqual(json.loads(fields['Script boxes'])[1]['text'],'MC')
             self.assertTrue(any(r['geometry_confirmed'] for r in json.loads(fields['Script relations'])))
             book.close()
+
+    def test_user_tm_coordinates_allow_three_pixel_box_overlap(self):
+        value = run_result([box('ezDispense',(6,6,154,37)),box('TM',(151,6,175,20))])
+        raw = value.text
+        apply_superscripts(value)
+        self.assertEqual(value.text,'ezDispenseTM')
+        self.assertEqual(value.raw_text,raw)
+        evidence = value.superscript_evidence
+        self.assertEqual(evidence['status'],'SUPERSCRIPT_ATTACHED')
+        relation = next(r for r in evidence['relations'] if r['body_box'] == 0)
+        self.assertEqual(relation['overlap_pixels'],3)
+        self.assertAlmostEqual(relation['overlap_limit_pixels'],4.65)
+        self.assertEqual(relation['rejected_checks'],[])
+
+    def test_excessive_or_contained_overlap_and_low_score_still_rejected(self):
+        for rect, score in [((145,6,169,20),.99), ((140,6,151,20),.99),
+                            ((151,6,155,20),.99), ((151,6,175,20),.2)]:
+            value = run_result([box('ezDispense',(6,6,154,37)),box('TM',rect,score)])
+            raw = value.text
+            apply_superscripts(value)
+            self.assertEqual(value.text,raw)
+            self.assertNotEqual(value.superscript_evidence['status'],'SUPERSCRIPT_ATTACHED')
