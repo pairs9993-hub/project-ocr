@@ -152,7 +152,7 @@ def recognize_separated_words(image, raw_text, recognize):
                        "word_regions": regions, "word_ocr": words}
 
 
-def apply_image_spacing(image, result, expected, recognize=None):
+def apply_image_spacing(image, result, expected, recognize=None, *, allow_word_retry=False):
     """Gate to complete single-box text with matching letters, then inspect pixels."""
     raw = result.text
     result.raw_text = raw
@@ -167,9 +167,9 @@ def apply_image_spacing(image, result, expected, recognize=None):
             result.spacing_evidence = {"status": "UNCERTAIN", "reason": "DIACRITIC_MISMATCH", "raw_text": raw}
             if recognize is not None and raw.strip() and len(result.boxes) == 1:
                 retry_diacritics(image, result, recognize)
-                if result.text == raw:
+                if allow_word_retry and result.text == raw:
                     retry_words(image, result, expected, recognize)
-        elif recognize is not None and len(result.boxes) == 1:
+        elif allow_word_retry and recognize is not None and len(result.boxes) == 1:
             retry_words(image, result, expected, recognize)
         return
     if len(result.boxes) != 1:

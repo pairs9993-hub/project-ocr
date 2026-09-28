@@ -1,4 +1,4 @@
-"""Bounded capture producer: screen sampling never waits for OCR."""
+"""Latest-frame capture: never build an OCR backlog."""
 from collections import deque
 import threading
 import time
@@ -18,6 +18,7 @@ class BufferedCapture:
         self.error = None
         self.bytes = 0
         self.captured = self.dropped = self.consumed = 0
+        self.superseded = 0
 
     def __enter__(self):
         self.thread = threading.Thread(target=self._produce, daemon=True)
@@ -35,10 +36,10 @@ class BufferedCapture:
                     size = image.width*image.height*len(image.getbands())
                     with self.condition:
                         self.captured += 1
-                        while self.queue and self.bytes+size > self.max_bytes:
+                        while self.queue:
                             _, _, removed_size = self.queue.popleft()
                             self.bytes -= removed_size
-                            self.dropped += 1
+                            self.superseded += 1
                         if size <= self.max_bytes:
                             self.queue.append((image, captured_at, size))
                             self.bytes += size
@@ -73,7 +74,8 @@ class BufferedCapture:
     def stats(self):
         with self.condition:
             return dict(captured_frames=self.captured, consumed_frames=self.consumed,
-                        dropped_frames=self.dropped, pending_frames=len(self.queue),
+                        dropped_frames=self.dropped, superseded_frames=self.superseded,
+                        pending_frames=len(self.queue), capture_policy="latest_frame",
                         buffer_limit_bytes=self.max_bytes)
 
     def __exit__(self, *args):

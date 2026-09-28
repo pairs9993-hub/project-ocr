@@ -118,8 +118,8 @@ def verify_case(processor, session, case, preset, references, duration, fps, sto
     from .buffered_capture import BufferedCapture
     capture_factory = getattr(processor, "_capture_factory", BufferedCapture)
     stream = capture_factory(session, preset, fps, observation_duration, stop)
-    # Drain already captured frames for at most another 30 seconds.
-    deadline = started_at + observation_duration + 30.0
+    # Do not spend another observation window draining stale frames.
+    deadline = started_at + observation_duration
     processed = {i: 0 for i in rois}
     ocr_seconds = {i: 0.0 for i in rois}
     reason = "TIMEOUT"

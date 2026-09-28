@@ -321,29 +321,26 @@ Original frame OCR remains in its existing column. This display fix does not
 supply missing accents or superscript letters, or relax verification thresholds.
 
 
-### Buffered automation capture and independent word retries
+### Latest-frame automation capture
 
-Automation captures on a dedicated thread at the requested FPS while OCR consumes
-frames in capture order. Observation still lasts at most 30 seconds; buffered OCR
-may continue for up to 30 additional seconds, with cancellation available. Early
-verification stops capture. Confirmation intervals use capture timestamps rather
-than processing timestamps. The in-memory queue is limited to 128 MiB of image
-pixels; overflow discards oldest queued frames and reports how many were dropped.
-This reduces gaps caused by slow OCR, but cannot guarantee processing every frame.
-Start OCR's manual capture loop is unchanged by this buffering feature.
+Automation captures independently of OCR, but retains only the latest waiting
+frame. When OCR finishes a frame, it receives the newest available screen rather
+than working through a FIFO backlog. Superseded frames are counted separately from
+frames rejected by the 128 MiB per-frame size limit. Confirmation uses capture
+timestamps. Cancellation stops the capture thread.
 
-ROI Results now includes captured frames, dropped frames, pending frames, per-ROI
-OCR result count and processing seconds, and unobserved expected-character positions.
-Missing characters are diagnostic expectations, not recognized output. Frame counts
-are shared across ROIs; completed ROIs stop OCR early, so counts can differ. A pending
-queue on success is normal. On timeout, pending or dropped frames indicate throughput
-pressure; neither zero count guarantees recognition accuracy.
+The observation and OCR deadline is again at most 30 seconds; there is no extra
+30-second backlog-draining phase. This avoids spending the observation budget on
+many similar early frames. It does not guarantee seeing every scrolling character
+when OCR itself is too slow. Start OCR's manual capture loop is unchanged.
 
-For near-complete single-box mismatches (text similarity >= 0.85), independently
-measured image gaps can split 2–4 word regions. Each word is recognized at two scales;
-only agreeing results with confidence >= 0.5 are adopted, with a further similarity
-check against the original OCR. This allows retrying an extra letter such as
-`Temp. Agua f fria`; the expected string only triggers a retry and is never inserted.
-The retry costs up to eight extra OCR calls and may still miss accents or small TM.
-Raw OCR and retry details are retained. Automated tests exercise buffering and
-mock recognition outcomes, not actual Vesta font recognition accuracy.
+ROI Results includes captured frames, superseded frames, dropped frames, pending
+frames (at most one), per-ROI OCR result count and processing seconds, and unobserved
+expected-character positions. Superseded frames are normal when OCR is slower than
+capture; they do not mean a verification failure by themselves.
+
+The expensive independent word retry added in 72f9d65 is disabled by default in
+both manual and automated OCR. It remains an explicitly opt-in internal function
+for testing, with no UI setting. Existing image-spacing and diacritic-only retries
+remain. Extra letters such as `Temp. Agua f fria` and tiny superscripts may still
+be misrecognized; raw output is preserved and verification is not relaxed.
