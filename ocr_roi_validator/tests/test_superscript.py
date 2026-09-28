@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import MagicMock
 from PIL import Image
 from ocr_roi_validator.ocr_engine import OCRBox, OCRRunResult, OCREngine
-from ocr_roi_validator.superscript import apply_superscript_tm
+from ocr_roi_validator.superscript import apply_superscripts
 from ocr_roi_validator.gui import OCRValidatorGUI
 
 
@@ -21,11 +21,11 @@ class SuperscriptTests(unittest.TestCase):
         boxes = [box('Limpieza de boquillas ezDispense', (5,20,300,50)), box('TM',(303,15,321,30))]
         result = run_result(boxes)
         original = result.text
-        apply_superscript_tm(result)
+        apply_superscripts(result)
         self.assertEqual(result.text, 'Limpieza de boquillas ezDispenseTM')
         self.assertEqual(result.raw_text, original)
         self.assertEqual(result.boxes, boxes)
-        self.assertEqual(result.superscript_evidence['status'], 'SUPERSCRIPT_TM_ATTACHED')
+        self.assertEqual(result.superscript_evidence['status'], 'SUPERSCRIPT_ATTACHED')
 
     def test_baseline_distant_low_confidence_and_ambiguous_marks_are_not_joined(self):
         body = box('ezDispense',(5,20,150,50))
@@ -34,18 +34,18 @@ class SuperscriptTests(unittest.TestCase):
         for mark in variants:
             result = run_result([body,mark])
             raw = result.text
-            apply_superscript_tm(result)
+            apply_superscripts(result)
             self.assertEqual(result.text, raw)
         result = run_result([body, box('another',(20,20,150,50)), box('TM',(153,15,171,30))])
         raw = result.text
-        apply_superscript_tm(result)
+        apply_superscripts(result)
         self.assertEqual(result.text,raw)
 
     def test_one_box_tm_has_no_geometry_evidence(self):
         result = run_result([box('ezDispense TM',(5,20,180,50))])
-        apply_superscript_tm(result)
+        apply_superscripts(result)
         self.assertEqual(result.text,'ezDispense TM')
-        self.assertEqual(result.superscript_evidence['status'],'NO_SEPARATE_TM_BOX')
+        self.assertEqual(result.superscript_evidence['status'],'NO_SEPARATE_REGION')
 
     def test_gui_run_engine_uses_geometry_without_additional_ocr(self):
         gui = OCRValidatorGUI.__new__(OCRValidatorGUI)
@@ -59,4 +59,53 @@ class SuperscriptTests(unittest.TestCase):
         gui.engine.run.assert_called_once()
         self.assertEqual(gui._last_ocr_input.raw_ocr_text,raw)
         self.assertTrue(gui._last_ocr_input.exact)
-        self.assertEqual(gui._last_ocr_input.superscript_evidence['status'],'SUPERSCRIPT_TM_ATTACHED')
+        self.assertEqual(gui._last_ocr_input.superscript_evidence['status'],'SUPERSCRIPT_ATTACHED')
+
+    def test_generic_short_scripts_and_short_body(self):
+        for mark in ('MC', '2', 'a', '\u03b2', '\u00ae'):
+            value = run_result([box('x',(5,20,30,50)),box(mark,(33,15,51,30))])
+            apply_superscripts(value)
+            self.assertEqual(value.text, 'x'+mark)
+            evidence = value.superscript_evidence
+            self.assertEqual(evidence['attachments'][0]['text'], mark)
+            self.assertEqual(evidence['attachments'][0]['relation'], 'superscript')
+            self.assertTrue(any(item['geometry_confirmed'] for item in evidence['relations']))
+
+    def test_subscript_and_normal_small_word_are_not_attached(self):
+        for rect in ((153,40,171,55), (153,35,171,50)):
+            value = run_result([box('body',(5,20,150,50)),box('MC',rect)])
+            raw = value.text
+            apply_superscripts(value)
+            self.assertEqual(value.text,raw)
+            self.assertNotEqual(value.superscript_evidence['status'],'SUPERSCRIPT_ATTACHED')
+            self.assertTrue(any('raised_baseline' in r['rejected_checks'] for r in value.superscript_evidence['relations']))
+
+    def test_competing_marks_abstain_instead_of_dropping_one(self):
+        value = run_result([box('body',(5,20,150,50)),box('M',(152,15,156,30)),box('C',(157,15,161,30))])
+        raw = value.text
+        apply_superscripts(value)
+        self.assertEqual(value.text,raw)
+        self.assertEqual(value.superscript_evidence['status'],'AMBIGUOUS_RELATION')
+
+    def test_report_exports_geometry_and_reason_fields(self):
+        import tempfile
+        import json
+        from pathlib import Path
+        from openpyxl import load_workbook
+        from ocr_roi_validator.automation_report import write_excel_report
+        value = run_result([box('body',(5,20,150,50)),box('MC',(153,15,171,30))])
+        apply_superscripts(value)
+        timing = dict(frame=1,captured_sec=0,ocr_started_sec=.1,ocr_finished_sec=.2,
+                      status='RETURNED',superscript=value.superscript_evidence)
+        report = {'results':[dict(sheet='TC',row=2,title='script',preset='p',status='FAIL',
+                  rois=[dict(roi_id=1,details={'frame_timings':[timing]})])]}
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder)/'report.xlsx'
+            write_excel_report(path,report)
+            book = load_workbook(path)
+            sheet = book['OCR Timing']
+            fields = dict(zip([c.value for c in sheet[1]],[c.value for c in sheet[2]]))
+            self.assertEqual(fields['Superscript status'],'SUPERSCRIPT_ATTACHED')
+            self.assertEqual(json.loads(fields['Script boxes'])[1]['text'],'MC')
+            self.assertTrue(any(r['geometry_confirmed'] for r in json.loads(fields['Script relations'])))
+            book.close()

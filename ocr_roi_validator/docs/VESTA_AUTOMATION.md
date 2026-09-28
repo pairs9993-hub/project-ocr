@@ -415,3 +415,32 @@ are hidden by default for compatibility and can be unhidden. The cell comment
 identifies reconstructed text versus raw fallback. OCR Timing remains available
 for per-frame investigation. The same display selection applies to live horizontal
 OCR. This change does not alter capture, recognition, or PASS conditions.
+
+
+### Generic superscript geometry (replaces TM-only handling)
+
+The separate-region layout check now applies to short annotations of 1–4 characters,
+including MC, numbers, lowercase letters, and other scripts, rather than matching
+only the string TM. It also permits common short annotation symbols. It requires
+both confidences >=0.5, height <=70% of the body, width <=one body height, a horizontal
+gap <=35% of body height, a top offset between -50% and +25% of body height, and a
+bottom at least 20% of body height above the body's bottom. These are conservative
+heuristics, not a trained layout classifier. Subscripts are not attached by this rule.
+
+One unambiguous body and annotation pair is required. Competing annotations and
+nested relations abstain. The actual annotation text is attached without inserting
+expected characters or converting it into a Unicode superscript glyph. Original
+text and boxes remain intact. If previous processing changed the text, geometry
+is recorded but text reconstruction is skipped. No extra OCR inference is run.
+
+OCR Timing replaces TM adjustment with Superscript status and adds Script boxes and
+Script relations. Boxes use OCR-input pixel coordinates [left, top, right, bottom];
+relations reference zero-based body_box/script_box indices and contain size/position
+ratios plus rejected_checks. JSON and failure metadata retain the same evidence.
+
+Statuses: SUPERSCRIPT_ATTACHED = relation used; NO_SEPARATE_REGION = no separately
+usable regions; GEOMETRY_NOT_CONFIRMED = criteria not met; AMBIGUOUS_RELATION =
+multiple competing relations; TEXT_ALREADY_ADJUSTED = geometry found but the text
+had already changed. A single box containing `body MC` cannot expose MC's geometry.
+For testing, provide Raw text, Evaluated text, Superscript status, and Script boxes
+from the same OCR Timing row; Script relations gives further rejection reasons.

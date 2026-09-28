@@ -147,9 +147,9 @@ def verify_case(processor, session, case, preset, references, duration, fps, sto
                         timing["raw_text"] = raw_output if isinstance(raw_output, str) and raw_output else ocr.text
                         timing["evaluated_text"] = ocr.text
                         timing["status"] = "RETURNED"
-                        tm = getattr(ocr, "superscript_evidence", None)
-                        if isinstance(tm, dict):
-                            timing["superscript"] = tm
+                        script_evidence = getattr(ocr, "superscript_evidence", None)
+                        if isinstance(script_evidence, dict):
+                            timing["superscript"] = script_evidence
                     except Exception as exc:
                         timing["status"] = type(exc).__name__
                         raise

@@ -989,8 +989,8 @@ class OCRValidatorGUI(AutomationWorkflow, ROIPresetWorkflow):
                 self._last_ocr_input.path_kind = ("diacritic_scaled_retry"
                                                   if result.spacing_evidence["method"] == "diacritic_scaled_retry"
                                                   else "spacing_word_retry")
-        from .superscript import apply_superscript_tm
-        apply_superscript_tm(result)
+        from .superscript import apply_superscripts
+        apply_superscripts(result)
         if record_as is not None and self._last_ocr_input is not None:
             self._last_ocr_input.superscript_evidence = result.superscript_evidence
         result.text = normalize_ocr_ui_text(result.text, expected_text)
@@ -1062,8 +1062,8 @@ class OCRValidatorGUI(AutomationWorkflow, ROIPresetWorkflow):
                             recognize=lambda piece: self.engine.run(piece, self.language_var.get()))
         if self._last_ocr_input is not None:
             self._last_ocr_input.spacing_evidence = context_ocr.spacing_evidence
-        from .superscript import apply_superscript_tm
-        apply_superscript_tm(context_ocr)
+        from .superscript import apply_superscripts
+        apply_superscripts(context_ocr)
         if self._last_ocr_input is not None:
             self._last_ocr_input.superscript_evidence = context_ocr.superscript_evidence
         context_ocr.text = normalize_ocr_ui_text(context_ocr.text, expected_text)

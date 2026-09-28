@@ -1,6 +1,7 @@
 """Automatic, formula-safe Excel summaries and ROI-level evidence."""
 from pathlib import Path
 import re
+import json
 
 from openpyxl import Workbook
 from openpyxl.comments import Comment
@@ -46,7 +47,7 @@ def write_excel_report(path: Path, report):
     trace = book.create_sheet("OCR Timing")
     trace.append(["TC number", "Sheet", "Row", "Preset", "ROI", "Frame", "Captured sec",
                   "OCR started sec", "OCR finished sec", "Status", "Raw text", "Evaluated text", "Assembly accepted", "Assembly reason",
-                  "Aligned start", "Character coverage", "Spacing", "Order confirmed", "TM adjustment", "Observed substitutions"])
+                  "Aligned start", "Character coverage", "Spacing", "Order confirmed", "Superscript status", "Observed substitutions", "Script boxes", "Script relations"])
     for tc in report["results"]:
         common = [tc.get("tc_number", str(tc["row"])), tc["sheet"], tc["row"], tc["title"], tc.get("image", ""),
                   "\n".join(tc.get("commands", [])), tc["preset"]]
@@ -61,7 +62,9 @@ def write_excel_report(path: Path, report):
                     timing.get("character_coverage"), timing.get("spacing_status", ""), timing.get("order_confirmed"),
                     timing.get("superscript", {}).get("status", ""),
                     " / ".join(f"{item['position']}:{item['observed']} (expected {item['expected']})"
-                               for item in timing.get("substitutions", []))])
+                               for item in timing.get("substitutions", [])),
+                    json.dumps(timing.get("superscript", {}).get("boxes", []), ensure_ascii=False),
+                    json.dumps(timing.get("superscript", {}).get("relations", []), ensure_ascii=False)])
             append_safe(detail, common + [roi["roi_id"], roi.get("expected", ""), roi.get("actual", ""),
                 roi.get("status", "PASS" if roi.get("passed") else "FAIL"), roi.get("reason", ""), roi.get("score"),
                 evidence.get("completed_cycles"), evidence.get("mode", ""), verdict(roi.get("status", "PASS" if roi.get("passed") else "FAIL")),
@@ -88,6 +91,7 @@ def write_excel_report(path: Path, report):
         append_safe(info, [key, str(report.get(key, ""))])
     info.append(["결과 구분", "PASS=검증 완료; FAIL_TIMEOUT=시간 내 미완료; ERROR=실행 오류; CANCELLED=사용자 중단; NOT_RUN=미실행"])
     info.append(["검출 텍스트", "조합이 완성되면 합부와 관계없이 조합 문장을 표시합니다. 미완성이면 실제 OCR 원문을 표시합니다. J열 메모에 표시 기준이 있습니다. 상세 프레임은 OCR Timing, 기존 진단 열은 숨김 해제로 확인합니다."])
+    info.append(["윗첨자 좌표", "Script boxes: OCR 입력 이미지 내 픽셀 좌표 [왼쪽, 위, 오른쪽, 아래]. Script relations: body_box/script_box는 0부터 시작하는 영역 번호이며, 비율은 본문 높이 기준입니다."])
     info.append(["길이 제한", "Excel 셀은 최대 32767자. 초과 시 잘림 표시; 전체 값은 같은 이름의 JSON 참조."])
     for sheet in book:
         sheet.freeze_panes = "A2"
